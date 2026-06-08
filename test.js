@@ -4,7 +4,15 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
-  console.log('START');
+  page.on('response', async (response) => {
+    const url = response.url();
+
+    if (
+      url.includes('AjaxAction')
+    ) {
+      console.log('AJAX=' + url);
+    }
+  });
 
   await page.goto('https://kouen.sports.metro.tokyo.lg.jp/web/', {
     waitUntil: 'networkidle'
@@ -18,12 +26,9 @@ const { chromium } = require('playwright');
 
   await page.click('#btn-go');
 
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(15000);
 
   console.log('URL=' + page.url());
-  console.log('TITLE=' + await page.title());
-
-  console.log('END');
 
   await browser.close();
 })();
