@@ -18,7 +18,24 @@ jobs:
 
       - run: npm install playwright
 
+      - run: npx playwright install chromium
+
       - run: |
-          node -e "
-          console.log('Playwright installed');
-          "
+          cat > test.js << 'EOF'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+
+            await page.goto('https://kouen.sports.metro.tokyo.lg.jp/web/', {
+              waitUntil: 'networkidle'
+            });
+
+            console.log(await page.title());
+
+            await browser.close();
+          })();
+          EOF
+
+      - run: node test.js
