@@ -4,20 +4,28 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
-  await page.goto(
-    'https://kouen.sports.metro.tokyo.lg.jp/web/rsvWOpeInstSrchVacantAction.do',
-    { waitUntil: 'networkidle' }
-  );
+  page.on('response', async (response) => {
+    const url = response.url();
 
-  await page.goto(
-    'https://kouen.sports.metro.tokyo.lg.jp/web/rsvWOpeInstSrchVacantAction.do',
-    {
-      waitUntil: 'networkidle'
+    if (url.includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
+      console.log('FOUND API');
+      console.log(url);
     }
-  );
+  });
 
-  console.log(page.url());
-  console.log(await page.title());
+  await page.goto('https://kouen.sports.metro.tokyo.lg.jp/web/', {
+    waitUntil: 'networkidle'
+  });
+
+  await page.selectOption('#purpose-home', '1000_1030');
+  await page.waitForTimeout(2000);
+
+  await page.selectOption('#bname-home', '1040');
+  await page.waitForTimeout(2000);
+
+  await page.click('#btn-go');
+
+  await page.waitForTimeout(10000);
 
   await browser.close();
 })();
