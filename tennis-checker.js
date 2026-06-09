@@ -34,23 +34,26 @@ const TARGETS = [
       }
     });
 
-console.log('OPEN ' + target.name);
+    console.log('OPEN ' + target.name);
 
-console.log('PAGE READY');
-    
-    await page.goto(
-      'https://kouen.sports.metro.tokyo.lg.jp/web/',
-      { waitUntil: 'networkidle' }
-    );
+await page.goto(
+  'https://kouen.sports.metro.tokyo.lg.jp/web/',
+  { waitUntil: 'networkidle' }
+);
 
-    await page.waitForSelector('#purpose-home', {
+console.log('URL=' + page.url());
+console.log('TITLE=' + await page.title());
+
+await page.waitForSelector('#purpose-home', {
   timeout: 60000
 });
-    
-    await page.selectOption(
-      '#purpose-home',
-      target.purpose
-    );
+
+console.log('FOUND PURPOSE');
+
+await page.selectOption(
+  '#purpose-home',
+  target.purpose
+);
 
     await page.waitForTimeout(1000);
 
