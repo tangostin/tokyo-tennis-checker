@@ -34,11 +34,19 @@ const TARGETS = [
       }
     });
 
+console.log('OPEN ' + target.name);
+
+console.log('PAGE READY');
+    
     await page.goto(
       'https://kouen.sports.metro.tokyo.lg.jp/web/',
       { waitUntil: 'networkidle' }
     );
 
+    await page.waitForSelector('#purpose-home', {
+  timeout: 60000
+});
+    
     await page.selectOption(
       '#purpose-home',
       target.purpose
