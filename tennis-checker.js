@@ -36,12 +36,34 @@ const TARGETS = [
 
     console.log('OPEN ' + target.name);
 
-await page.goto(
-  'https://kouen.sports.metro.tokyo.lg.jp/web/',
-  { waitUntil: 'networkidle' }
-);
+let title = '';
 
-const title = await page.title();
+for (let retry = 1; retry <= 5; retry++) {
+
+  await page.goto(
+    'https://kouen.sports.metro.tokyo.lg.jp/web/',
+    { waitUntil: 'networkidle' }
+  );
+
+  title = await page.title();
+
+  console.log(
+    'TRY=' + retry +
+    ' TITLE=' + title
+  );
+
+  if (!title.includes('お知らせ')) {
+    break;
+  }
+
+  await page.waitForTimeout(5000);
+}
+
+if (title.includes('お知らせ')) {
+  console.log('SITE ERROR');
+  await page.close();
+  continue;
+}    
 
 console.log('URL=' + page.url());
 console.log('TITLE=' + title);
