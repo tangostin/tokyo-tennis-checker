@@ -85,6 +85,28 @@ await page.selectOption(
   target.purpose
 );
 
+console.log('PURPOSE SELECTED');
+
+await page.waitForTimeout(1000);
+
+await page.selectOption(
+  '#bname-home',
+  target.park
+);
+
+console.log('PARK SELECTED');
+
+await page.waitForTimeout(1000);
+
+await page.click('#btn-go');
+
+console.log('SEARCH CLICKED');
+
+await page.waitForTimeout(10000);
+
+console.log('FINAL URL=' + page.url());
+console.log('FINAL TITLE=' + await page.title());
+    
     await page.waitForTimeout(1000);
 
     await page.selectOption(
