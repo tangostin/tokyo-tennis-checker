@@ -2,47 +2,47 @@ const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
 const TARGETS = [
-  { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
-  { name: '木場公園', purpose: '1000_1030', park: '1060' },
-  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' }
+{ name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
+{ name: '木場公園', purpose: '1000_1030', park: '1060' },
+{ name: '祖師谷公園', purpose: '1000_1030', park: '1070' }
 ];
 
 (async () => {
 
-  const browser = await chromium.launch({
-    headless: true
-  });
+const browser = await chromium.launch({
+headless: true
+});
 
-  let results = [];
+let results = [];
 
-  for (const target of TARGETS) {
+for (const target of TARGETS) {
 
-    let page = await browser.newPage();
-
-    let jsonText = null;
-
-    page.on('response', async (response) => {
-
-      if (
-        response.url().includes(
-          'rsvWOpeInstSrchVacantAjaxAction.do'
-        )
-      ) {
-        try {
-          jsonText = await response.text();
-        } catch (e) {}
-      }
-    });
-
-    console.log('OPEN ' + target.name);
+```
+console.log('OPEN ' + target.name);
 
 let pageReady = false;
+let page;
+let jsonText = null;
 
 for (let retry = 1; retry <= 3; retry++) {
 
   const context = await browser.newContext();
 
   page = await context.newPage();
+
+  page.on('response', async (response) => {
+
+    if (
+      response.url().includes(
+        'rsvWOpeInstSrchVacantAjaxAction.do'
+      )
+    ) {
+      try {
+        jsonText = await response.text();
+        console.log('JSON CAPTURED');
+      } catch (e) {}
+    }
+  });
 
   await page.goto(
     'https://kouen.sports.metro.tokyo.lg.jp/web/',
@@ -72,8 +72,6 @@ for (let retry = 1; retry <= 3; retry++) {
 
     await page.close();
 
-    await context.close();
-
     await new Promise(
       r => setTimeout(r, 5000)
     );
@@ -87,15 +85,7 @@ if (!pageReady) {
   );
 
   break;
-} 
-
-console.log('URL=' + page.url());
-
-await page.waitForSelector('#purpose-home', {
-  timeout: 60000
-});
-
-console.log('FOUND PURPOSE');
+}
 
 await page.selectOption(
   '#purpose-home',
@@ -121,33 +111,38 @@ console.log('SEARCH CLICKED');
 
 await page.waitForTimeout(10000);
 
-console.log('FINAL URL=' + page.url());
-console.log('FINAL TITLE=' + await page.title());
-    
-    results.push(
-      `===== ${target.name} =====\n` +
-      (jsonText || '取得失敗')
-    );
+console.log(
+  jsonText
+    ? 'JSON OK'
+    : 'JSON NG'
+);
 
-    await page.close();
-  }
+results.push(
+  `===== ${target.name} =====\n` +
+  (jsonText || '取得失敗')
+);
 
-  await browser.close();
+await page.close();
+```
 
-  const transporter =
-    nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD
-      }
-    });
+}
 
-  await transporter.sendMail({
-    from: process.env.GMAIL_USER,
-    to: process.env.NOTIFY_EMAIL,
-    subject: 'テニス空き状況テスト',
-    text: results.join('\n\n')
-  });
+await browser.close();
+
+const transporter =
+nodemailer.createTransport({
+service: 'gmail',
+auth: {
+user: process.env.GMAIL_USER,
+pass: process.env.GMAIL_APP_PASSWORD
+}
+});
+
+await transporter.sendMail({
+from: process.env.GMAIL_USER,
+to: process.env.NOTIFY_EMAIL,
+subject: 'テニス空き状況テスト',
+text: results.join('\n\n')
+});
 
 })();
