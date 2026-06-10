@@ -13,7 +13,7 @@ const browser = await chromium.launch({
 headless: true
 });
 
-let results = [];
+const results = [];
 
 for (const target of TARGETS) {
 
@@ -21,14 +21,12 @@ for (const target of TARGETS) {
 console.log('OPEN ' + target.name);
 
 let pageReady = false;
-let page;
+let page = null;
 let jsonText = null;
 
 for (let retry = 1; retry <= 3; retry++) {
 
-  const context = await browser.newContext();
-
-  page = await context.newPage();
+  page = await browser.newPage();
 
   page.on('response', async (response) => {
 
@@ -40,7 +38,8 @@ for (let retry = 1; retry <= 3; retry++) {
       try {
         jsonText = await response.text();
         console.log('JSON CAPTURED');
-      } catch (e) {}
+      } catch (e) {
+      }
     }
   });
 
@@ -66,7 +65,7 @@ for (let retry = 1; retry <= 3; retry++) {
 
     break;
 
-  } catch {
+  } catch (e) {
 
     console.log('PURPOSE NOT FOUND');
 
@@ -118,7 +117,9 @@ console.log(
 );
 
 results.push(
-  `===== ${target.name} =====\n` +
+  '===== ' +
+  target.name +
+  ' =====\n' +
   (jsonText || '取得失敗')
 );
 
@@ -144,5 +145,7 @@ to: process.env.NOTIFY_EMAIL,
 subject: 'テニス空き状況テスト',
 text: results.join('\n\n')
 });
+
+console.log('MAIL SENT');
 
 })();
