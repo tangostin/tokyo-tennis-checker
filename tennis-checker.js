@@ -90,13 +90,6 @@ if (!pageReady) {
 } 
 
 console.log('URL=' + page.url());
-console.log('TITLE=' + title);
-
-if (title.includes('お知らせ')) {
-  console.log('SITE ERROR');
-  await page.close();
-  continue;
-}
 
 await page.waitForSelector('#purpose-home', {
   timeout: 60000
