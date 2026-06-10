@@ -17,7 +17,7 @@ const TARGETS = [
 
   for (const target of TARGETS) {
 
-    const page = await browser.newPage();
+    let page = await browser.newPage();
 
     let jsonText = null;
 
@@ -40,12 +40,16 @@ let title = '';
 
 for (let retry = 1; retry <= 5; retry++) {
 
-  await page.goto(
+  const context = await browser.newContext();
+
+  const retryPage = await context.newPage();
+
+  await retryPage.goto(
     'https://kouen.sports.metro.tokyo.lg.jp/web/',
     { waitUntil: 'networkidle' }
   );
 
-  title = await page.title();
+  title = await retryPage.title();
 
   console.log(
     'TRY=' + retry +
@@ -53,10 +57,19 @@ for (let retry = 1; retry <= 5; retry++) {
   );
 
   if (!title.includes('お知らせ')) {
+
+    await page.close();
+
+    page = retryPage;
+
     break;
   }
 
-  await page.waitForTimeout(5000);
+  await retryPage.close();
+
+  await context.close();
+
+  await new Promise(r => setTimeout(r, 5000));
 }
 
 if (title.includes('お知らせ')) {
