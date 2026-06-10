@@ -36,40 +36,57 @@ const TARGETS = [
 
     console.log('OPEN ' + target.name);
 
-let title = '';
+let pageReady = false;
 
-for (let retry = 1; retry <= 5; retry++) {
+for (let retry = 1; retry <= 3; retry++) {
 
   const context = await browser.newContext();
 
-  const retryPage = await context.newPage();
+  page = await context.newPage();
 
-  await retryPage.goto(
+  await page.goto(
     'https://kouen.sports.metro.tokyo.lg.jp/web/',
-    { waitUntil: 'networkidle' }
+    {
+      waitUntil: 'networkidle'
+    }
   );
 
-  title = await retryPage.title();
+  console.log('TRY=' + retry);
 
-  console.log(
-    'TRY=' + retry +
-    ' TITLE=' + title
-  );
+  try {
 
-  if (!title.includes('お知らせ')) {
+    await page.waitForSelector(
+      '#purpose-home',
+      { timeout: 10000 }
+    );
+
+    console.log('FOUND PURPOSE');
+
+    pageReady = true;
+
+    break;
+
+  } catch {
+
+    console.log('PURPOSE NOT FOUND');
 
     await page.close();
 
-    page = retryPage;
+    await context.close();
 
-    break;
+    await new Promise(
+      r => setTimeout(r, 5000)
+    );
   }
+}
 
-  await retryPage.close();
+if (!pageReady) {
 
-  await context.close();
+  console.log(
+    'SITE UNAVAILABLE - STOP CHECKING'
+  );
 
-  await new Promise(r => setTimeout(r, 5000));
+  break;
 }
 
 if (title.includes('お知らせ')) {
