@@ -17,7 +17,6 @@ const results = [];
 
 for (const target of TARGETS) {
 
-```
 console.log('OPEN ' + target.name);
 
 let pageReady = false;
@@ -124,7 +123,6 @@ results.push(
 );
 
 await page.close();
-```
 
 }
 
