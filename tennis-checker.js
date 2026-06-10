@@ -87,13 +87,7 @@ if (!pageReady) {
   );
 
   break;
-}
-
-if (title.includes('お知らせ')) {
-  console.log('SITE ERROR');
-  await page.close();
-  continue;
-}    
+} 
 
 console.log('URL=' + page.url());
 console.log('TITLE=' + title);
