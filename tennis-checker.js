@@ -124,19 +124,6 @@ await page.waitForTimeout(10000);
 console.log('FINAL URL=' + page.url());
 console.log('FINAL TITLE=' + await page.title());
     
-    await page.waitForTimeout(1000);
-
-    await page.selectOption(
-      '#bname-home',
-      target.park
-    );
-
-    await page.waitForTimeout(1000);
-
-    await page.click('#btn-go');
-
-    await page.waitForTimeout(5000);
-
     results.push(
       `===== ${target.name} =====\n` +
       (jsonText || '取得失敗')
