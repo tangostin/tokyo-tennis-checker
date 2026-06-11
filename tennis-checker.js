@@ -4,15 +4,28 @@ const nodemailer = require('nodemailer');
 // ==========================================
 // 【テスト設定】
 // true の間はダミーの空きデータを注入してメールの見た目を確認できます。
-// テスト完了後は false に書き換えてください。
+// 動作確認が取れ、本番稼動させる際は false にしてください。
 const TEST_MODE = true;
 // ==========================================
 
-// 対象施設リスト（ここに施設を追加して13施設にしてください）
+// 対象施設リスト（全13施設・特定コード反映版）
 const TARGETS = [
+  // --- テニス（人工芝） 種目コード: 1000_1030 ---
+  { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
+  { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
-  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' }
+  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+  { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
+  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' },
+  { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
+  { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
+
+  // --- テニス（ハード） 種目コード: 1000_1020 ---
+  { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
+  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
+  { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
@@ -98,6 +111,7 @@ function formatTime(timeNum) {
     await page.click('#btn-go');
     console.log('SEARCH CLICKED');
 
+    // 13施設を順に回るため、各検索の合間に少し長めのウェイトを入れています
     await page.waitForTimeout(10000);
 
     console.log(jsonText ? 'JSON OK' : 'JSON NG');
@@ -116,7 +130,7 @@ function formatTime(timeNum) {
             
             // 当月かつ土日祝の判定
             const useDayStr = String(item.useDay || '');
-            const dow = item.useDayOfWeek || ''; // 曜日 (例: "土", "日")
+            const dow = item.useDayOfWeek || ''; // 曜日 (例: "土", "日", "祝")
             
             const isCurrentMonth = useDayStr.startsWith(currentMonthStr);
             const isWeekendOrHoliday = dow.includes('土') || dow.includes('日') || dow.includes('祝');
@@ -140,7 +154,7 @@ function formatTime(timeNum) {
     }
 
     // テストモードかつ最初の公園の場合、ダミーデータを注入して表示テストを行う
-    if (TEST_MODE && target.name === '猿江恩賜公園') {
+    if (TEST_MODE && target.name === '日比谷公園（人工芝）') {
       parkVacantLines.push('2026/6/20（土）13:00-15:00（4面）');
       parkVacantLines.push('2026/6/20（土）15:00-17:00（2面）');
     }
