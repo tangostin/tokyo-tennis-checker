@@ -7,15 +7,21 @@ const TARGETS = [
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' }
 ];
 
-// 数値の日付 (20260609) を "2026/06/09" に整形する関数
-function formatDate(dateNum) {
+// 日付と曜日を整形する関数
+function formatDateWithDay(dateNum) {
   if (!dateNum) return '';
   const str = String(dateNum);
   if (str.length !== 8) return str;
-  return `${str.substring(0, 4)}/${str.substring(4, 6)}/${str.substring(6, 8)}`;
+  const y = parseInt(str.substring(0, 4));
+  const m = parseInt(str.substring(4, 6)) - 1;
+  const d = parseInt(str.substring(6, 8));
+  const date = new Date(y, m, d);
+  const dayList = ['日', '月', '火', '水', '木', '金', '土'];
+  const day = dayList[date.getDay()];
+  return `${y}/${m + 1}/${d}（${day}）`;
 }
 
-// 数値の時間 (900 や 1100) を "09:00" や "11:00" に整形する関数
+// 時間を整形する関数
 function formatTime(timeNum) {
   if (timeNum === undefined || timeNum === null) return '';
   const str = String(timeNum).padStart(4, '0');
@@ -29,7 +35,7 @@ function formatTime(timeNum) {
   });
 
   const mailLines = [];
-  let hasAnyVacant = false; // 全施設通して1件でも空きがあるかどうかのフラグ
+  let hasAnyVacant = false;
 
   for (const target of TARGETS) {
 
@@ -40,131 +46,99 @@ function formatTime(timeNum) {
     let jsonText = null;
 
     for (let retry = 1; retry <= 3; retry++) {
-
       page = await browser.newPage();
-
       page.on('response', async (response) => {
-        if (
-          response.url().includes(
-            'rsvWOpeInstSrchVacantAjaxAction.do'
-          )
-        ) {
+        if (response.url().includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
           try {
             jsonText = await response.text();
             console.log('JSON CAPTURED');
-          } catch (e) {
-            // エラー時は無視して次へ
-          }
+          } catch (e) {}
         }
       });
 
-      await page.goto(
-        'https://kouen.sports.metro.tokyo.lg.jp/web/',
-        {
-          waitUntil: 'networkidle'
-        }
-      );
+      await page.goto('https://kouen.sports.metro.tokyo.lg.jp/web/', {
+        waitUntil: 'networkidle'
+      });
 
       console.log('TRY=' + retry);
 
       try {
-        await page.waitForSelector(
-          '#purpose-home',
-          { timeout: 10000 }
-        );
-
+        await page.waitForSelector('#purpose-home', { timeout: 10000 });
         console.log('FOUND PURPOSE');
         pageReady = true;
         break;
-
       } catch (e) {
         console.log('PURPOSE NOT FOUND');
         await page.close();
-        await new Promise(
-          r => setTimeout(r, 5000)
-        );
+        await new Promise(r => setTimeout(r, 5000));
       }
     }
 
     if (!pageReady) {
-      console.log(
-        'SITE UNAVAILABLE - STOP CHECKING'
-      );
+      console.log('SITE UNAVAILABLE - STOP CHECKING');
       break;
     }
 
-    await page.selectOption(
-      '#purpose-home',
-      target.purpose
-    );
-
-    console.log('PURPOSE SELECTED');
+    await page.selectOption('#purpose-home', target.purpose);
     await page.waitForTimeout(1000);
-
-    await page.selectOption(
-      '#bname-home',
-      target.park
-    );
-
-    console.log('PARK SELECTED');
+    await page.selectOption('#bname-home', target.park);
     await page.waitForTimeout(1000);
-
     await page.click('#btn-go');
     console.log('SEARCH CLICKED');
 
     await page.waitForTimeout(10000);
 
-    console.log(
-      jsonText
-        ? 'JSON OK'
-        : 'JSON NG'
-    );
-
-    // --- ここからJSONの解析・成型ロジック ---
     const parkVacantLines = [];
 
     if (jsonText) {
       try {
         const parsed = JSON.parse(jsonText);
-        
-        // レスポンスが直接配列の場合と、オブジェクトの内部に配列がある場合の両方に対応
         const items = Array.isArray(parsed) 
           ? parsed 
           : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || []);
 
         for (const item of items) {
           if (item && item.alt === '空き') {
-            const dateStr = formatDate(item.useDay);
+            const dateStr = formatDateWithDay(item.useDay);
             const startStr = formatTime(item.startTime);
             const endStr = formatTime(item.endTime);
+            const count = item.vacantNum || '1'; // 面数。データがない場合は1とする
             
             if (dateStr && startStr && endStr) {
-              parkVacantLines.push(`${dateStr} ${startStr}-${endStr}`);
+              parkVacantLines.push(`${dateStr} ${startStr}-${endStr}（${count}面）`);
             }
           }
         }
-      } catch (parseError) {
-        console.log('JSON PARSE ERROR: ' + parseError.message);
+      } catch (e) {
+        console.log('JSON PARSE ERROR');
       }
     }
 
-    // メール本文の各公園ブロックを組み立てる
-    mailLines.push(`【${target.name}】\n`);
+    // 空きがある場合のみ、公園名と情報を追加
     if (parkVacantLines.length > 0) {
+      mailLines.push(`【${target.name}】`);
       mailLines.push(parkVacantLines.join('\n'));
-      hasAnyVacant = true; // 空きが見つかったのでフラグを立てる
-    } else {
-      mailLines.push('空きなし');
+      mailLines.push(''); // スペース
+      hasAnyVacant = true;
     }
-    mailLines.push('\n'); // 公園ごとの区切り改行
 
     await page.close();
   }
 
   await browser.close();
 
-  // 空きが1件以上ある場合のみ、メールを送信する
-  if (hasAnyVacant) {
+  // 日本時間1時台（深夜の初回実行想定）かどうか
+  const now = new Date();
+  // GitHub ActionsはUTCなので+9時間して判定
+  const jstHour = (now.getUTCHours() + 9) % 24;
+  const isInitialRun = (jstHour === 1);
+
+  // 空きがあるか、あるいは1時台の初回実行ならメール送信
+  if (hasAnyVacant || isInitialRun) {
+    
+    // 末尾にURLを追加
+    mailLines.push('https://kouen.sports.metro.tokyo.lg.jp/web/');
+
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -176,7 +150,7 @@ function formatTime(timeNum) {
     await transporter.sendMail({
       from: process.env.GMAIL_USER,
       to: process.env.NOTIFY_EMAIL,
-      subject: 'テニスコート空き状況通知',
+      subject: hasAnyVacant ? '【空きあり】テニスコート状況' : 'テニス空き状況（定期通知）',
       text: mailLines.join('\n')
     });
 
