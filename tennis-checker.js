@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 // 【テスト設定】
 // true の間はダミーの空きデータを注入してメールの見た目を確認できます。
 // 動作確認が取れ、本番稼動させる際は false にしてください。
-const TEST_MODE = true;
+const TEST_MODE = false; 
 // ==========================================
 
 // 対象施設リスト（全13施設）
@@ -30,6 +30,38 @@ const TARGETS = [
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
 
+// 内閣府発表等の国民の祝日を自動判定するための関数
+function isHoliday(date) {
+  const y = date.getFullYear();
+  const m = date.getMonth() + 1;
+  const d = date.getDate();
+  
+  // 祝日データを簡易的に網羅（振替休日や年によってズレる祝日は都度ここに足すか、主要な祝日を指定）
+  // ※ 2026年の主要な祝日リスト
+  const holidays2026 = [
+    '2026-1-1',  // 元日
+    '2026-1-12', // 成人の日
+    '2026-2-11', // 建国記念の日
+    '2026-2-23', // 天皇誕生日
+    '2026-3-20', // 春分の日
+    '2026-4-29', // 昭和の日
+    '2026-5-3',  // 憲法記念日
+    '2026-5-4',  // みどりの日
+    '2026-5-5',  // こどもの日
+    '2026-5-6',  // 振替休日
+    '2026-7-20', // 海の日
+    '2026-8-11', // 山の日
+    '2026-9-21', // 敬老の日
+    '2026-9-22', // 国民の休日
+    '2026-9-23', // 秋分の日
+    '2026-10-12',// スポーツの日
+    '2026-11-3', // 文化の日
+    '2026-11-23',// 勤労感謝の日
+  ];
+  
+  return holidays2026.includes(`${y}-${m}-${d}`);
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const mailLines = [];
@@ -51,45 +83,41 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
       // 2. 検索結果表示と「月表示」展開
       await page.waitForSelector('text=月表示', { timeout: 15000 });
       await page.click('text=月表示');
-      await page.waitForTimeout(3000); // カレンダーが描画されるのを少し待つ
+      await page.waitForTimeout(3000);
 
       // 3. 画面上のカレンダーの全セル（日付マス）を解析
-      // クラス名や構造から、カレンダー内の日付セルのテキストを丸ごと引っこ抜きます
       const cellTexts = await page.evaluate(() => {
-        // カレンダーの枠（status-calendar-boxなど）の中にあるすべてのセルを取得
         const cells = Array.from(document.querySelectorAll('.status-calendar-box td, .mansion-facility td, td'));
         return cells.map(c => c.innerText.trim()).filter(t => t.length > 0);
       });
 
       const parkVacantLines = [];
 
-      // 各セルのテキストを検証（例: 「15\n▲」や「20\n×」のような改行区切りで入っています）
       for (const text of cellTexts) {
-        // 数字と記号に分解
         const lines = text.split('\n').map(l => l.trim());
         if (lines.length >= 2) {
-          const dayNum = parseInt(lines[0], 10); // 日にち (例: 15)
-          const mark = lines[1]; // マーク (例: ▲, ●, ×)
+          const dayNum = parseInt(lines[0], 10); 
+          const mark = lines[1]; 
 
           if (!isNaN(dayNum) && (mark === '▲' || mark === '●')) {
-            // 現在の年・月から、その「日にち」の曜日を計算
             const now = new Date();
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
             const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
 
-            // 土曜日(6)または日曜日(0)の場合のみリストに追加（祝日はカレンダー上の色判定が必要なため一旦土日に絞っています）
-            if (checkDate.getDay() === 0 || checkDate.getDay() === 6) {
+            // 【条件】土曜日(6) か 日曜日(0) か 祝日の場合のみ対象にする
+            if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
               const month = now.getMonth() + 1;
-              parkVacantLines.push(`${month}/${dayNum}（${dayOfWeek}）: 【${mark}】空きあり`);
+              const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
+              parkVacantLines.push(`${month}月${dayNum}日（${label}）`);
             }
           }
         }
       }
 
-      // テストモードかつ最初の公園の場合、ダミーデータを注入
+      // テストモード用のダミーデータ（見た目確認用）
       if (TEST_MODE && target.name === '日比谷公園（人工芝）') {
-        parkVacantLines.push('6/20（土）: 【●】空きあり (テストデータ)');
-        parkVacantLines.push('6/21（日）: 【▲】一部空きあり (テストデータ)');
+        parkVacantLines.push('6月20日（土）');
+        parkVacantLines.push('6月21日（日）');
       }
 
       // 空きが見つかった場合のみメール本文に追加
@@ -130,6 +158,6 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
 
     console.log('メールを送信しました。');
   } else {
-    console.log('土日祝に空きコートはありませんでした（メール送信スキップ）。');
+    console.log('対象日に空きコートはありませんでした（メール送信スキップ）。');
   }
 })();
