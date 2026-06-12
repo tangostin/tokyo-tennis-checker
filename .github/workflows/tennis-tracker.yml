@@ -1,0 +1,44 @@
+name: Tennis Court Auto Checker
+
+on:
+  schedule:
+    # 30分に1回実行する設定（協定世界時UTCのため、日本時間の毎時10分と40分に動きます）
+    - cron: '10,40 * * * *'
+  workflow_dispatch: # 手動でいつでも実行できるボタンを設置
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-node-version: '20'
+
+    - name: Install dependencies
+      run: |
+        npm init -y
+        npm install playwright nodemailer
+
+    - name: Install Playwright Browsers
+      run: npx playwright install chromium
+
+    - name: Run checker
+      env:
+        NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        GMAIL_USER: ${{ secrets.GMAIL_USER }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      run: node tennis-checker.js
+
+    - name: Commit and Push if last_vacant.txt changed
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        if [ -f last_vacant.txt ]; then
+          git add last_vacant.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update last vacant cache [skip ci]" && git push)
+        fi
