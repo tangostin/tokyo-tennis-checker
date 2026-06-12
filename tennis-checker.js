@@ -10,53 +10,77 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   const browser = await chromium.launch({ headless: true });
   const target = TARGETS[0];
 
-  console.log('=== 調査第2弾: ' + target.name + ' ===');
+  console.log('=== 調査第3弾（月表示の展開テスト） ===');
 
   let page = await browser.newPage();
-  let jsonText = null;
-
+  
+  // 検索後に流れる全ての通信（JSONなど）を監視
   page.on('response', async (response) => {
-    if (response.url().includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
+    const url = response.url();
+    if (url.includes('AjaxAction.do')) {
       try {
-        jsonText = await response.text();
+        const text = await response.text();
+        console.log(`[通信キャプチャ] URL: ${url.substring(url.lastIndexOf('/'))} (サイズ: ${text.length}文字)`);
       } catch (e) {}
     }
   });
 
+  // 1. 通常通り検索を実行
   await page.goto(SITE_URL, { waitUntil: 'networkidle' });
   await page.selectOption('#purpose-home', target.purpose);
   await page.waitForTimeout(500);
   await page.selectOption('#bname-home', target.park);
   await page.waitForTimeout(500);
   await page.click('#btn-go');
+  await page.waitForTimeout(5000); // 検索完了を待つ
 
-  // データの読み込みを待つ
-  await page.waitForTimeout(8000);
+  console.log('\n--- ページ内の「月」に関係しそうな要素を調査 ---');
+  
+  // ページ内にある「月」という文字が入ったクリック可能な要素をリストアップ
+  const elements = await page.evaluate(() => {
+    const clickables = Array.from(document.querySelectorAll('a, button, div, span, img, input'));
+    return clickables
+      .filter(el => el.textContent && el.textContent.includes('月'))
+      .map(el => ({
+        tagName: el.tagName,
+        text: el.textContent.trim().substring(0, 30),
+        id: el.id,
+        className: el.className
+      })).slice(0, 10); // 上位10件
+  });
+  console.log(elements);
 
-  if (jsonText) {
-    try {
-      const parsed = JSON.parse(jsonText);
-      console.log('\n--- キャプチャしたJSONの生データ（最初の2件分） ---');
-      
-      // 配列かオブジェクトかに応じて、中身の構造を分かりやすく出力します
-      const items = Array.isArray(parsed) 
-        ? parsed 
-        : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || [parsed]);
+  console.log('\n--- 「月間状況」や「月表示」らしきマークのクリックに挑戦 ---');
 
-      // 最初の2件だけ中身を細かく表示
-      console.log(JSON.stringify(items.slice(0, 2), null, 2));
-      
-      console.log('\n--- JSONにある全ての「キー（名前）」のリスト ---');
-      if (items[0]) {
-        console.log(Object.keys(items[0]));
+  // サイトによくある「月間状況」や「月表示」というテキスト、または開閉ボタンを狙ってクリックしてみる
+  try {
+    // 「月」という文字を含むボタンやリンクを探してクリックを試みる
+    const clickTargets = ['text=月間', 'text=月表示', 'text=当月', '.icon-plus', '.btn-expand'];
+    let clicked = false;
+
+    for (const selector of clickTargets) {
+      const isVisible = await page.locator(selector).count() > 0;
+      if (isVisible) {
+        console.log(`ターゲット発見、クリックします: ${selector}`);
+        await page.click(selector);
+        clicked = true;
+        break;
       }
-
-    } catch (e) {
-      console.log('JSON解析エラー: ' + e.message);
     }
-  } else {
-    console.log('JSONがキャプチャできませんでした。');
+
+    if (!clicked) {
+      // テキストで見つからない場合、開閉用っぽいマーク（imgやボタン）を強制クリックしてみる実験
+      console.log('特定のテキストで見つからないため、ページ内の最初の「月」を含む要素をクリックしてみます。');
+      await page.click('xpath=//*[contains(text(), "月")]');
+    }
+
+  } catch (err) {
+    console.log('クリック実験エラー（気にする必要はありません）: ' + err.message);
   }
+
+  // クリックした後に新しいデータが流れ込んでくるのをしばらく待つ
+  console.log('クリック後のデータ読み込み待ち（8秒）...');
+  await page.waitForTimeout(8000);
 
   await browser.close();
   console.log('=== 調査終了 ===');
