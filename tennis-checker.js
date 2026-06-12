@@ -10,23 +10,9 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   const browser = await chromium.launch({ headless: true });
   const target = TARGETS[0];
 
-  console.log('=== 調査第4弾（月表示データの構造解析） ===');
+  console.log('=== 調査第5弾（画面の文字をのぞき見） ===');
 
   let page = await browser.newPage();
-  let jsonText = null;
-
-  // 月表示クリック後に流れる、サイズの大きい方のJSONを狙い撃ちしてキャッチします
-  page.on('response', async (response) => {
-    if (response.url().includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
-      try {
-        const text = await response.text();
-        if (text.length > 2000) { // 週表示（小さい）と区別するため2000文字以上を指定
-          jsonText = text;
-          console.log(`月表示のJSONキャプチャ成功！ (サイズ: ${text.length}文字)`);
-        }
-      } catch (e) {}
-    }
-  });
 
   // 1. 通常通り検索を実行
   await page.goto(SITE_URL, { waitUntil: 'networkidle' });
@@ -35,46 +21,33 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   await page.selectOption('#bname-home', target.park);
   await page.waitForTimeout(500);
   await page.click('#btn-go');
-  await page.waitForTimeout(4000); // 検索完了待ち
+  await page.waitForTimeout(4000); // 最初の読み込み待ち
 
   // 2. 「月表示」をカチッとクリック
   console.log('「月表示」をクリックします...');
   await page.click('text=月表示');
   
-  // 3. データが流れ込んでくるのを待つ
-  await page.waitForTimeout(6000);
+  // 画面が完全に書き換わるのをしっかり待つ（5秒）
+  await page.waitForTimeout(5000); 
 
-  if (jsonText) {
-    try {
-      const parsed = JSON.parse(jsonText);
-      console.log('\n--- 月表示JSONの生データ（最初の2件分） ---');
-      
-      const items = Array.isArray(parsed) 
-        ? parsed 
-        : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || [parsed]);
-
-      // 最初の2件を詳細表示
-      console.log(JSON.stringify(items.slice(0, 2), null, 2));
-      
-      console.log('\n--- 月表示JSONの全ての「キー（名前）」のリスト ---');
-      if (items[0]) {
-        console.log(Object.keys(items[0]));
-        
-        // もし2重構造（配列の中にさらに配列）になっている場合、その中身も解析します
-        const nestedKey = Object.keys(items[0]).find(k => Array.isArray(items[0][k]));
-        if (nestedKey && items[0][nestedKey][0]) {
-          console.log(`\n内側の配列「${nestedKey}」のキーリスト:`);
-          console.log(Object.keys(items[0][nestedKey][0]));
-          console.log(`\n内側の配列の最初のデータ構造:`);
-          console.log(JSON.stringify(items[0][nestedKey][0], null, 2));
-        }
-      }
-
-    } catch (e) {
-      console.log('JSON解析エラー: ' + e.message);
+  // 3. 画面に見えているテキストをまるごと取得
+  const bodyText = await page.innerText('body');
+  
+  console.log('\n--- 画面から検出された日付・空きマークの文字 ---');
+  const lines = bodyText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  // 日付（日）や空きマーク（●、▲、予約）が含まれる行だけを抜き出して表示
+  let foundCount = 0;
+  lines.forEach(line => {
+    if (line.includes('2026') || line.includes('月') || line.includes('日') || line.includes('●') || line.includes('▲')) {
+      console.log(`[画面の文字] ${line}`);
+      foundCount++;
     }
-  } else {
-    console.log('月表示のJSONが取得できませんでした。');
+  });
+
+  if (foundCount === 0) {
+    console.log('対象となる文字が画面から見つかりませんでした。全テキストを表示します：');
+    console.log(bodyText.substring(0, 1000));
   }
 
   await browser.close();
