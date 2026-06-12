@@ -10,17 +10,20 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   const browser = await chromium.launch({ headless: true });
   const target = TARGETS[0];
 
-  console.log('=== 調査第3弾（月表示の展開テスト） ===');
+  console.log('=== 調査第4弾（月表示データの構造解析） ===');
 
   let page = await browser.newPage();
-  
-  // 検索後に流れる全ての通信（JSONなど）を監視
+  let jsonText = null;
+
+  // 月表示クリック後に流れる、サイズの大きい方のJSONを狙い撃ちしてキャッチします
   page.on('response', async (response) => {
-    const url = response.url();
-    if (url.includes('AjaxAction.do')) {
+    if (response.url().includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
       try {
         const text = await response.text();
-        console.log(`[通信キャプチャ] URL: ${url.substring(url.lastIndexOf('/'))} (サイズ: ${text.length}文字)`);
+        if (text.length > 2000) { // 週表示（小さい）と区別するため2000文字以上を指定
+          jsonText = text;
+          console.log(`月表示のJSONキャプチャ成功！ (サイズ: ${text.length}文字)`);
+        }
       } catch (e) {}
     }
   });
@@ -32,55 +35,47 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   await page.selectOption('#bname-home', target.park);
   await page.waitForTimeout(500);
   await page.click('#btn-go');
-  await page.waitForTimeout(5000); // 検索完了を待つ
+  await page.waitForTimeout(4000); // 検索完了待ち
 
-  console.log('\n--- ページ内の「月」に関係しそうな要素を調査 ---');
+  // 2. 「月表示」をカチッとクリック
+  console.log('「月表示」をクリックします...');
+  await page.click('text=月表示');
   
-  // ページ内にある「月」という文字が入ったクリック可能な要素をリストアップ
-  const elements = await page.evaluate(() => {
-    const clickables = Array.from(document.querySelectorAll('a, button, div, span, img, input'));
-    return clickables
-      .filter(el => el.textContent && el.textContent.includes('月'))
-      .map(el => ({
-        tagName: el.tagName,
-        text: el.textContent.trim().substring(0, 30),
-        id: el.id,
-        className: el.className
-      })).slice(0, 10); // 上位10件
-  });
-  console.log(elements);
+  // 3. データが流れ込んでくるのを待つ
+  await page.waitForTimeout(6000);
 
-  console.log('\n--- 「月間状況」や「月表示」らしきマークのクリックに挑戦 ---');
+  if (jsonText) {
+    try {
+      const parsed = JSON.parse(jsonText);
+      console.log('\n--- 月表示JSONの生データ（最初の2件分） ---');
+      
+      const items = Array.isArray(parsed) 
+        ? parsed 
+        : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || [parsed]);
 
-  // サイトによくある「月間状況」や「月表示」というテキスト、または開閉ボタンを狙ってクリックしてみる
-  try {
-    // 「月」という文字を含むボタンやリンクを探してクリックを試みる
-    const clickTargets = ['text=月間', 'text=月表示', 'text=当月', '.icon-plus', '.btn-expand'];
-    let clicked = false;
-
-    for (const selector of clickTargets) {
-      const isVisible = await page.locator(selector).count() > 0;
-      if (isVisible) {
-        console.log(`ターゲット発見、クリックします: ${selector}`);
-        await page.click(selector);
-        clicked = true;
-        break;
+      // 最初の2件を詳細表示
+      console.log(JSON.stringify(items.slice(0, 2), null, 2));
+      
+      console.log('\n--- 月表示JSONの全ての「キー（名前）」のリスト ---');
+      if (items[0]) {
+        console.log(Object.keys(items[0]));
+        
+        // もし2重構造（配列の中にさらに配列）になっている場合、その中身も解析します
+        const nestedKey = Object.keys(items[0]).find(k => Array.isArray(items[0][k]));
+        if (nestedKey && items[0][nestedKey][0]) {
+          console.log(`\n内側の配列「${nestedKey}」のキーリスト:`);
+          console.log(Object.keys(items[0][nestedKey][0]));
+          console.log(`\n内側の配列の最初のデータ構造:`);
+          console.log(JSON.stringify(items[0][nestedKey][0], null, 2));
+        }
       }
-    }
 
-    if (!clicked) {
-      // テキストで見つからない場合、開閉用っぽいマーク（imgやボタン）を強制クリックしてみる実験
-      console.log('特定のテキストで見つからないため、ページ内の最初の「月」を含む要素をクリックしてみます。');
-      await page.click('xpath=//*[contains(text(), "月")]');
+    } catch (e) {
+      console.log('JSON解析エラー: ' + e.message);
     }
-
-  } catch (err) {
-    console.log('クリック実験エラー（気にする必要はありません）: ' + err.message);
+  } else {
+    console.log('月表示のJSONが取得できませんでした。');
   }
-
-  // クリックした後に新しいデータが流れ込んでくるのをしばらく待つ
-  console.log('クリック後のデータ読み込み待ち（8秒）...');
-  await page.waitForTimeout(8000);
 
   await browser.close();
   console.log('=== 調査終了 ===');
