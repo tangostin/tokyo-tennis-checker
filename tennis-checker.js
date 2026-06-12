@@ -1,6 +1,5 @@
 const { chromium } = require('playwright');
 
-// 調査のため、日比谷公園（人工芝）の1施設だけに絞っています
 const TARGETS = [
   { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' }
 ];
@@ -11,7 +10,7 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   const browser = await chromium.launch({ headless: true });
   const target = TARGETS[0];
 
-  console.log('=== 調査開始: ' + target.name + ' ===');
+  console.log('=== 調査第2弾: ' + target.name + ' ===');
 
   let page = await browser.newPage();
   let jsonText = null;
@@ -20,7 +19,6 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
     if (response.url().includes('rsvWOpeInstSrchVacantAjaxAction.do')) {
       try {
         jsonText = await response.text();
-        console.log('JSONキャプチャ成功！');
       } catch (e) {}
     }
   });
@@ -38,21 +36,23 @@ const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
   if (jsonText) {
     try {
       const parsed = JSON.parse(jsonText);
+      console.log('\n--- キャプチャしたJSONの生データ（最初の2件分） ---');
+      
+      // 配列かオブジェクトかに応じて、中身の構造を分かりやすく出力します
       const items = Array.isArray(parsed) 
         ? parsed 
-        : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || []);
+        : (parsed.vacantList || parsed.list || Object.values(parsed).find(Array.isArray) || [parsed]);
 
-      console.log(`\n【結果】JSONから合計 ${items.length} 件のデータが見つかりました。`);
+      // 最初の2件だけ中身を細かく表示
+      console.log(JSON.stringify(items.slice(0, 2), null, 2));
       
-      if (items.length > 0) {
-        // 空き・満員に関わらず、最初と最後のデータの日付を表示してみる
-        const firstDay = items[0].useDay;
-        const lastDay = items[items.length - 1].useDay;
-        console.log(`最初の日付データ: ${firstDay}`);
-        console.log(`最後の日付データ: ${lastDay}`);
+      console.log('\n--- JSONにある全ての「キー（名前）」のリスト ---');
+      if (items[0]) {
+        console.log(Object.keys(items[0]));
       }
+
     } catch (e) {
-      console.log('JSONの解析に失敗しました: ' + e.message);
+      console.log('JSON解析エラー: ' + e.message);
     }
   } else {
     console.log('JSONがキャプチャできませんでした。');
