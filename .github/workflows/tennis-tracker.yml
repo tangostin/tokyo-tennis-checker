@@ -20,9 +20,7 @@ jobs:
         node-node-version: '20'
 
     - name: Install dependencies
-      run: |
-        npm init -y
-        npm install playwright nodemailer
+      run: npm install
 
     - name: Install Playwright Browsers
       run: npx playwright install chromium
