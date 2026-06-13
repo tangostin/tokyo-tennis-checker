@@ -3,7 +3,7 @@ name: Tennis Court Auto Checker
 on:
   schedule:
     # 30分に1回実行する設定（協定世界時UTCのため、日本時間の毎時10分と40分に動きます）
-    - cron: '10,40 * * * *'
+    - cron: '13,43 * * * *'
   workflow_dispatch: # 手動でいつでも実行できるボタンを設置
 
 jobs:
