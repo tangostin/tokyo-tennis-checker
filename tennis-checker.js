@@ -99,11 +99,11 @@ function isHoliday(date) {
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
             const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
 
-            if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
+            //if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
               const month = now.getMonth() + 1;
               const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
               parkVacantLines.push(`${month}月${dayNum}日（${label}）`);
-            }
+            //}
           }
         }
       }
