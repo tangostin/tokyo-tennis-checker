@@ -10,9 +10,9 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1160', park: '1160' },
   { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
-  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
+  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1220', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
   { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
@@ -74,7 +74,7 @@ function isHoliday(date) {
     if (!success) {
       console.log(`[致命的エラー] ${target.name} へのアクセスが失敗したため、この回の巡回を安全に中断します。`);
       await page.close();
-      break; // ループ全体を終了（4コート目などで死んだらそこで終了する仕様）
+      break; // ループ全体を終了
     }
 
     // データの読み込みとスキャン
@@ -82,28 +82,38 @@ function isHoliday(date) {
       await page.click('text=月表示');
       await page.waitForTimeout(3000);
 
-      const cellTexts = await page.evaluate(() => {
-        const cells = Array.from(document.querySelectorAll('.status-calendar-box td, .mansion-facility td, td'));
-        return cells.map(c => c.innerText.trim()).filter(t => t.length > 0);
-      });
-
+      // カレンダー内の「日付セル」をすべて取得
+      const cells = await page.$$('.status-calendar-box td, .mansion-facility td, td');
       const parkVacantLines = [];
-      for (const text of cellTexts) {
-        const lines = text.split('\n').map(l => l.trim());
-        if (lines.length >= 2) {
-          const dayNum = parseInt(lines[0], 10);
-          const mark = lines[1];
 
-          if (!isNaN(dayNum) && (mark === '▲' || mark === '●')) {
+      for (const cell of cells) {
+        // セル内のテキスト（日付の数字）を取得
+        const cellText = await cell.innerText();
+        const lines = cellText.split('\n').map(l => l.trim());
+        if (lines.length === 0 || !lines[0]) continue;
+
+        const dayNum = parseInt(lines[0], 10);
+        if (isNaN(dayNum)) continue;
+
+        // セル内に img タグ（空きマーク画像）があるか確認
+        const imgElement = await cell.$('img');
+        if (imgElement) {
+          // 画像の alt 属性の値を取得
+          const altText = await imgElement.getAttribute('alt');
+
+          // "一部空き" または "空き" に完全一致するか厳格に判定
+          if (altText === '一部空き' || altText === '空き') {
             const now = new Date();
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
             const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
 
-            //if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
+            // 👇 【全曜日検証用】平日でも通知を飛ばすため、土日祝判定を一時的にスキップ中
+            // if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
               const month = now.getMonth() + 1;
               const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
-              parkVacantLines.push(`${month}月${dayNum}日（${label}）`);
-            //}
+              // メールの内容に、どのマーク（[一部空き] または [空き]）だったかも明記します
+              parkVacantLines.push(`${month}月${dayNum}日（${label}）[${altText}]`);
+            // }
           }
         }
       }
