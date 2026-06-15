@@ -10,13 +10,13 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1160', park: '1160' },
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' }, // 💡目的コードのタイポを修正しました
   { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1220', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
   { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
-  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
+  { name: '大井ふ頭海浜公園B（ハード')', purpose: '1000_1020', park: '1315' },
   { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
@@ -68,21 +68,22 @@ function isHoliday(date) {
       }
     }
 
+    // 💡【修正点】アクセス失敗時、全体を道連れ終了（break）せず、次の公園へパス（continue）する
     if (!success) {
-      console.log(`[致命的エラー] ${target.name} へのアクセスが失敗したため、この回の巡回を安全に中断します。`);
+      console.log(`[アクセス断念] ${target.name} はスキップして次の施設に向かいます。`);
       await page.close();
-      break; 
+      continue; 
     }
 
     // データの読み込みとスキャン
     try {
-      // 💡【ピンポイント対策】月表示エリア内の「aria-label="詳細表示"」を持つ展開ボタンを直接指定してクリック
+      // 月表示エリア内の「aria-label="詳細表示"」を持つ展開ボタンを直接指定してクリック
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
       
       console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
       await expandButton.click();
       
-      // 💡【20秒どっしり待機】クリック後、カレンダーの「表（table）」がロードされるまで最大20秒じっくり待つ
+      // クリック後、カレンダーの「表（table）」がロードされるまで最大20秒じっくり待つ
       console.log('  -> カレンダー展開中... 表示完了まで待機します（最大20秒）');
       await page.waitForSelector('.status-calendar-box table td', { timeout: 20000 });
 
@@ -91,25 +92,20 @@ function isHoliday(date) {
       const parkVacantLines = [];
 
       for (const cell of cells) {
-        // セル内のテキスト（日付の数字）を取得
         const cellText = await cell.innerText();
         if (!cellText || cellText.trim() === '') continue;
 
         const lines = cellText.split('\n').map(l => l.trim());
         if (lines.length === 0 || !lines[0]) continue;
 
-        // 日付の数字をパース
         const dayNum = parseInt(lines[0], 10);
         if (isNaN(dayNum) || dayNum <= 0) continue;
 
-        // セル内に img タグ（空きマーク画像）があるか確認
         const imgElement = await cell.$('img');
         if (imgElement) {
-          // 画像の alt 属性の値を取得
           let altText = await imgElement.getAttribute('alt');
           if (altText) altText = altText.trim();
 
-          // 部分一致で柔軟に捉える
           if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
