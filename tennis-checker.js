@@ -81,7 +81,7 @@ function isHoliday(date) {
     try {
       await page.click('text=月表示');
       
-      // 💡【対策1】カレンダーの「画像（img）」が画面にすべて出揃うまで確実に待つ
+      // 【対策1】カレンダーの「画像（img）」が画面に出揃うまで確実に待つ
       await page.waitForSelector('.status-calendar-box table td img', { timeout: 10000 }).catch(() => {
         console.log('  -> 画像要素の読み込み待ちがタイムアウトしました（空きが1件もない可能性があります）');
       });
@@ -108,13 +108,13 @@ function isHoliday(date) {
         if (imgElement) {
           // 画像の alt 属性の値を取得
           let altText = await imgElement.getAttribute('alt');
-          if (altText) altText = altText.trim(); // 💡【対策2】文字の前後に隠れたスペースがあれば削除
+          if (altText) altText = altText.trim();
 
-          // 💡【対策3】完全一致（===）で弾かれている可能性を考慮し、部分一致（includes）で確実に捉える
+          // 【対策2】部分一致で厳実かつ柔軟に捉える
           if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
-            // 今日（15日）より前の過去の日付はスキップ
+            // 今日より前の過去の日付はスキップ
             if (dayNum < now.getDate()) continue; 
 
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
@@ -135,7 +135,7 @@ function isHoliday(date) {
         currentMailLines.push(parkVacantLines.join('\n'));
         currentMailLines.push('');
       }
-    } catch (err) { catch (err) {
+    } catch (err) {
       console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`);
     } finally {
       await page.close();
