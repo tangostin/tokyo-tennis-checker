@@ -10,13 +10,13 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' }, // 💡目的コードのタイポを修正しました
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
   { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1220', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
   { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
-  { name: '大井ふ頭海浜公園B（ハード')', purpose: '1000_1020', park: '1315' },
+  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' }, // 💡クォーテーションの位置を修正しました
   { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
@@ -68,7 +68,6 @@ function isHoliday(date) {
       }
     }
 
-    // 💡【修正点】アクセス失敗時、全体を道連れ終了（break）せず、次の公園へパス（continue）する
     if (!success) {
       console.log(`[アクセス断念] ${target.name} はスキップして次の施設に向かいます。`);
       await page.close();
