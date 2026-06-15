@@ -80,9 +80,14 @@ function isHoliday(date) {
     // データの読み込みとスキャン
     try {
       await page.click('text=月表示');
-      await page.waitForTimeout(3000);
+      
+      // 💡【対策1】カレンダーの「画像（img）」が画面にすべて出揃うまで確実に待つ
+      await page.waitForSelector('.status-calendar-box table td img', { timeout: 10000 }).catch(() => {
+        console.log('  -> 画像要素の読み込み待ちがタイムアウトしました（空きが1件もない可能性があります）');
+      });
+      await page.waitForTimeout(2000); // 念のための安全マージン（2秒待機）
 
-      // 💡【修正ポイント】カレンダーのテーブル内の td だけを正確に1回ずつ取得（重複を完全排除）
+      // カレンダー内の「日付セル」を取得
       const cells = await page.$$('.status-calendar-box table td');
       const parkVacantLines = [];
 
@@ -102,13 +107,14 @@ function isHoliday(date) {
         const imgElement = await cell.$('img');
         if (imgElement) {
           // 画像の alt 属性の値を取得
-          const altText = await imgElement.getAttribute('alt');
+          let altText = await imgElement.getAttribute('alt');
+          if (altText) altText = altText.trim(); // 💡【対策2】文字の前後に隠れたスペースがあれば削除
 
-          // "一部空き" または "空き" に完全一致するか厳格に判定
-          if (altText === '一部空き' || altText === '空き') {
+          // 💡【対策3】完全一致（===）で弾かれている可能性を考慮し、部分一致（includes）で確実に捉える
+          if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
-            // 今日（14日）より前の過去の日付はスキップ
+            // 今日（15日）より前の過去の日付はスキップ
             if (dayNum < now.getDate()) continue; 
 
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
@@ -129,8 +135,7 @@ function isHoliday(date) {
         currentMailLines.push(parkVacantLines.join('\n'));
         currentMailLines.push('');
       }
-    
-    } catch (err) {
+    } catch (err) { catch (err) {
       console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`);
     } finally {
       await page.close();
