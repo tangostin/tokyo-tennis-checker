@@ -45,32 +45,29 @@ function isHoliday(date) {
     const page = await browser.newPage();
     let success = false;
 
-    // 【要件追加】サイトが不安定なため、TOPでのセレクトボックス呼び出しを最大3回リトライする
+    // TOPでのセレクトボックス呼び出しを最大3回リトライ
     for (let retry = 1; retry <= 3; retry++) {
       try {
         await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 20000 });
         
-        // 目的のセレクトボックスが見えるか確認
         await page.waitForSelector('#purpose-home', { timeout: 5000 });
         
-        // 見つかったら選択して検索実行
         await page.selectOption('#purpose-home', target.purpose);
         await page.waitForTimeout(500);
         await page.selectOption('#bname-home', target.park);
         await page.waitForTimeout(500);
         await page.click('#btn-go');
         
-        // 月表示のアコーディオンヘッダーが出るまで待つ
+        // 月表示の親ボックスが出るまで待つ
         await page.waitForSelector('.status-calendar-box', { timeout: 10000 });
         success = true;
-        break; // リトライを抜ける
+        break; 
       } catch (e) {
         console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページを入り直します...`);
         await page.waitForTimeout(2000);
       }
     }
 
-    // 3回リトライしてもダメな場合
     if (!success) {
       console.log(`[致命的エラー] ${target.name} へのアクセスが失敗したため、この回の巡回を安全に中断します。`);
       await page.close();
@@ -79,11 +76,13 @@ function isHoliday(date) {
 
     // データの読み込みとスキャン
     try {
-      // 💡【修正点1】「月表示」のエリア内にある、展開用のアイコン（ボタン）を正確にクリック
-      // キャプチャー内の右端にある開閉リンク（aタグやボタン要素、またはヘッダー全体）を狙います
-      await page.click('.status-calendar-box a, .status-calendar-box [role="button"], text=月表示');
+      // 💡【ピンポイント対策】月表示エリア内の「aria-label="詳細表示"」を持つ展開ボタンを直接指定してクリック
+      const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
       
-      // 💡【修正点2】展開マークを押してから、カレンダーの「表（table）」が完全にロードされるまで最大20秒じっくり待つ
+      console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
+      await expandButton.click();
+      
+      // 💡【20秒どっしり待機】クリック後、カレンダーの「表（table）」がロードされるまで最大20秒じっくり待つ
       console.log('  -> カレンダー展開中... 表示完了まで待機します（最大20秒）');
       await page.waitForSelector('.status-calendar-box table td', { timeout: 20000 });
 
@@ -110,7 +109,7 @@ function isHoliday(date) {
           let altText = await imgElement.getAttribute('alt');
           if (altText) altText = altText.trim();
 
-          // 部分一致で厳実かつ柔軟に捉える
+          // 部分一致で柔軟に捉える
           if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
@@ -148,14 +147,13 @@ function isHoliday(date) {
   const currentVacantText = currentMailLines.join('\n').trim();
   const fullMailText = currentVacantText ? `${currentVacantText}\n\n${SITE_URL}` : SITE_URL;
 
-  // --- 【要件3】差分チェックのロジック ---
+  // --- 差分チェックのロジック ---
   let isFirstRun = !fs.existsSync(CACHE_FILE);
   let lastVacantText = '';
   if (!isFirstRun) {
     lastVacantText = fs.readFileSync(CACHE_FILE, 'utf8').trim();
   }
 
-  // 「1回目（キャッシュなし）」または「前回と内容が変わったとき（差分あり）」のみメール送信
   if (isFirstRun || currentVacantText !== lastVacantText) {
     console.log(isFirstRun ? '初回実行のためメールを送信します。' : '空き状況に変化（差分）があったため、メールを送信します。');
 
@@ -179,6 +177,5 @@ function isHoliday(date) {
     console.log('前回から空き状況に変化がありません。メール送信をスキップします。');
   }
 
-  // 今回の最新状態をファイルに保存
   fs.writeFileSync(CACHE_FILE, currentVacantText, 'utf8');
 })();
