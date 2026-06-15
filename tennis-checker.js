@@ -60,8 +60,8 @@ function isHoliday(date) {
         await page.waitForTimeout(500);
         await page.click('#btn-go');
         
-        // 月表示ボタンが出るまで待つ（ここまで来ればアクセス成功）
-        await page.waitForSelector('text=月表示', { timeout: 10000 });
+        // 月表示のアコーディオンヘッダーが出るまで待つ
+        await page.waitForSelector('.status-calendar-box', { timeout: 10000 });
         success = true;
         break; // リトライを抜ける
       } catch (e) {
@@ -70,22 +70,22 @@ function isHoliday(date) {
       }
     }
 
-    // 3回リトライしてもダメ、または途中の公園で完全にアクセス不能になった場合
+    // 3回リトライしてもダメな場合
     if (!success) {
       console.log(`[致命的エラー] ${target.name} へのアクセスが失敗したため、この回の巡回を安全に中断します。`);
       await page.close();
-      break; // ループ全体を終了
+      break; 
     }
 
     // データの読み込みとスキャン
     try {
-      await page.click('text=月表示');
+      // 💡【修正点1】「月表示」のエリア内にある、展開用のアイコン（ボタン）を正確にクリック
+      // キャプチャー内の右端にある開閉リンク（aタグやボタン要素、またはヘッダー全体）を狙います
+      await page.click('.status-calendar-box a, .status-calendar-box [role="button"], text=月表示');
       
-      // 【対策1】カレンダーの「画像（img）」が画面に出揃うまで確実に待つ
-      await page.waitForSelector('.status-calendar-box table td img', { timeout: 10000 }).catch(() => {
-        console.log('  -> 画像要素の読み込み待ちがタイムアウトしました（空きが1件もない可能性があります）');
-      });
-      await page.waitForTimeout(2000); // 念のための安全マージン（2秒待機）
+      // 💡【修正点2】展開マークを押してから、カレンダーの「表（table）」が完全にロードされるまで最大20秒じっくり待つ
+      console.log('  -> カレンダー展開中... 表示完了まで待機します（最大20秒）');
+      await page.waitForSelector('.status-calendar-box table td', { timeout: 20000 });
 
       // カレンダー内の「日付セル」を取得
       const cells = await page.$$('.status-calendar-box table td');
@@ -110,7 +110,7 @@ function isHoliday(date) {
           let altText = await imgElement.getAttribute('alt');
           if (altText) altText = altText.trim();
 
-          // 【対策2】部分一致で厳実かつ柔軟に捉える
+          // 部分一致で厳実かつ柔軟に捉える
           if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
