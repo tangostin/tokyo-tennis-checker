@@ -82,18 +82,21 @@ function isHoliday(date) {
       await page.click('text=月表示');
       await page.waitForTimeout(3000);
 
-      // カレンダー内の「日付セル」をすべて取得
-      const cells = await page.$$('.status-calendar-box td, .mansion-facility td, td');
+      // 💡【修正ポイント】カレンダーのテーブル内の td だけを正確に1回ずつ取得（重複を完全排除）
+      const cells = await page.$$('.status-calendar-box table td');
       const parkVacantLines = [];
 
       for (const cell of cells) {
         // セル内のテキスト（日付の数字）を取得
         const cellText = await cell.innerText();
+        if (!cellText || cellText.trim() === '') continue;
+
         const lines = cellText.split('\n').map(l => l.trim());
         if (lines.length === 0 || !lines[0]) continue;
 
+        // 日付の数字をパース
         const dayNum = parseInt(lines[0], 10);
-        if (isNaN(dayNum)) continue;
+        if (isNaN(dayNum) || dayNum <= 0) continue;
 
         // セル内に img タグ（空きマーク画像）があるか確認
         const imgElement = await cell.$('img');
@@ -104,6 +107,10 @@ function isHoliday(date) {
           // "一部空き" または "空き" に完全一致するか厳格に判定
           if (altText === '一部空き' || altText === '空き') {
             const now = new Date();
+            
+            // 今日（14日）より前の過去の日付はスキップ
+            if (dayNum < now.getDate()) continue; 
+
             const checkDate = new Date(now.getFullYear(), now.getMonth(), dayNum);
             const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
 
@@ -111,7 +118,6 @@ function isHoliday(date) {
             // if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
               const month = now.getMonth() + 1;
               const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
-              // メールの内容に、どのマーク（[一部空き] または [空き]）だったかも明記します
               parkVacantLines.push(`${month}月${dayNum}日（${label}）[${altText}]`);
             // }
           }
@@ -123,6 +129,7 @@ function isHoliday(date) {
         currentMailLines.push(parkVacantLines.join('\n'));
         currentMailLines.push('');
       }
+    
     } catch (err) {
       console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`);
     } finally {
