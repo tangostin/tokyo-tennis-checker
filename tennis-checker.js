@@ -16,7 +16,7 @@ const TARGETS = [
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
   { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
-  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' }, // 💡クォーテーションの位置を修正しました
+  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
   { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
@@ -82,9 +82,14 @@ function isHoliday(date) {
       console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
       await expandButton.click();
       
-      // クリック後、カレンダーの「表（table）」がロードされるまで最大20秒じっくり待つ
-      console.log('  -> カレンダー展開中... 表示完了まで待機します（最大20秒）');
-      await page.waitForSelector('.status-calendar-box table td', { timeout: 20000 });
+      // カレンダー展開後、「中の画像（imgタグ）」または「日付の文字」が完全に読み込まれるまで最大20秒待つ
+      console.log('  -> カレンダー展開中... 内部データの読み込みを待機します（最大20秒）');
+      await page.waitForSelector('.status-calendar-box table td img, .status-calendar-box table td a', { timeout: 20000 }).catch(() => {
+        console.log('  -> [タイムアウト警告] 内部要素の読み込みがタイムアウトしました。そのままスキャンを試みます。');
+      });
+
+      // 確実に描画を完了させるため、念のためさらに2秒の固定ウェイトを入れます
+      await page.waitForTimeout(2000);
 
       // カレンダー内の「日付セル」を取得
       const cells = await page.$$('.status-calendar-box table td');
@@ -100,11 +105,20 @@ function isHoliday(date) {
         const dayNum = parseInt(lines[0], 10);
         if (isNaN(dayNum) || dayNum <= 0) continue;
 
+        // セル内に img タグ（空きマーク画像）があるか確認
         const imgElement = await cell.$('img');
+        
+        // 💡【デバッグログ1】何日に画像があるか・ないかを全て出力
+        console.log(`    [データ確認] ${dayNum}日: 画像の有無 = ${imgElement ? '◯ あり' : '× なし'}`);
+
         if (imgElement) {
           let altText = await imgElement.getAttribute('alt');
           if (altText) altText = altText.trim();
 
+          // 💡【デバッグログ2】画像があった場合、そのalt属性（文字）が何になっているかを出力
+          console.log(`      -> alt属性の文字: [${altText}]`);
+
+          // 部分一致（「一部」または「空き」が含まれるか）で確実に判定
           if (altText && (altText.includes('一部') || altText.includes('空き'))) {
             const now = new Date();
             
