@@ -40,6 +40,10 @@ function isHoliday(date) {
   const browser = await chromium.launch({ headless: true });
   const currentMailLines = [];
 
+// 実行時の「今日」の日付情報を取得（GitHub環境でも強制的に日本時間にする）
+const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
+
   for (const target of TARGETS) {
     console.log(`[巡回] ${target.name} を確認中...`);
     const page = await browser.newPage();
@@ -49,7 +53,6 @@ function isHoliday(date) {
     for (let retry = 1; retry <= 3; retry++) {
       try {
         await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 20000 });
-        
         await page.waitForSelector('#purpose-home', { timeout: 5000 });
         
         await page.selectOption('#purpose-home', target.purpose);
@@ -58,7 +61,6 @@ function isHoliday(date) {
         await page.waitForTimeout(500);
         await page.click('#btn-go');
         
-        // 月表示の親ボックスが出るまで待つ
         await page.waitForSelector('.status-calendar-box', { timeout: 10000 });
         success = true;
         break; 
@@ -74,74 +76,117 @@ function isHoliday(date) {
       continue; 
     }
 
-    // データの読み込みとスキャン
     try {
-      // 月表示エリア内の「aria-label="詳細表示"」を持つ展開ボタンを直接指定してクリック
+      // 1. 詳細表示（月表示）ボタンをクリックしてカレンダーを展開
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
-      
       console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
       await expandButton.click();
       
-      // 改修：カレンダー展開後、月表示テーブル（#month-info）が完全に現れるのを最大30秒間じっと待つ
-      console.log('  -> カレンダー展開中... 月表示テーブル(#month-info)の読み込みを待機します（最大30秒）');
+      // 月表示テーブルが最初に出現するのを待つ
       await page.waitForSelector('#month-info', { timeout: 30000 });
-
-      // 確実に描画を完了させるため、2秒の固定ウェイトを維持
       await page.waitForTimeout(2000);
 
-      // 改修：下の週表示テーブルに干渉しないよう、月表示テーブル内の「日付セル」だけをピンポイントに取得
-      const cells = await page.$$('#month-info td');
-      const parkVacantLines = [];
+      // カレンダー内の空き枠を解析する共通関数（当月・翌月の両方で使い回します）
+      async function scanCurrentCalendarPage() {
+        const parkVacantLines = [];
+        const cells = await page.$$('#month-info td');
 
-      for (const cell of cells) {
-        // 改修：マスのID属性（例: month_20260602）をベースに判断する
-        const id = await cell.getAttribute('id');
-        
-        // IDが無い、またはカレンダーの端の空白マス（month_ から始まらない）ならスキップ
-        if (!id || !id.startsWith('month_')) continue;
+        for (const cell of cells) {
+          const id = await cell.getAttribute('id');
+          if (!id || !id.startsWith('month_')) continue;
 
-        // IDから日付の文字列を取り出す（例: "20260602"）
-        const dateStr = id.replace('month_', '');
-        const targetYear = parseInt(dateStr.slice(0, 4), 10);
-        const targetMonth = parseInt(dateStr.slice(4, 6), 10);
-        const targetDay = parseInt(dateStr.slice(6, 8), 10);
+          const dateStr = id.replace('month_', '');
+          const targetYear = parseInt(dateStr.slice(0, 4), 10);
+          const targetMonth = parseInt(dateStr.slice(4, 6), 10);
+          const targetDay = parseInt(dateStr.slice(6, 8), 10);
 
-        // セル内に img タグ（空きマーク画像）があるか確認
-        const imgElement = await cell.$('img');
-        
-        if (imgElement) {
-          let altText = await imgElement.getAttribute('alt');
-          if (altText) altText = altText.trim();
+          const imgElement = await cell.$('img');
+          if (imgElement) {
+            let altText = await imgElement.getAttribute('alt');
+            if (altText) altText = altText.trim();
 
-          // 改修：ALT文字が「空き」または「一部空き」に完全一致するかどうかを厳密にチェック
-          if (altText === '空き' || altText === '一部空き') {
-            const now = new Date();
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const checkDate = new Date(targetYear, targetMonth - 1, targetDay);
+            if (altText === '空き' || altText === '一部空き') {
+              const todayObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              const checkDate = new Date(targetYear, targetMonth - 1, targetDay);
 
-            // 今日より前の過去の日付はスキャンから除外
-            if (checkDate < today) continue; 
+              // 今日より前の過去の日付は除外
+              if (checkDate < todayObj) continue; 
 
-            // デバッグログを出力
-            console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
-
-            const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
-
-            // 👇 【全曜日検証用】平日でも通知を飛ばすため、土日祝判定を一時的にスキップ中
-            // if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
+              console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
+              const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
               const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
               parkVacantLines.push(`${targetMonth}月${targetDay}日（${label}）[${altText}]`);
-            // }
+            }
           }
         }
+        return parkVacantLines;
       }
 
-      if (parkVacantLines.length > 0) {
+      // --- 【ステップA】当月分のカレンダーをスキャン ---
+      // カレンダー上部にある現在の「年・月」テキストを取得して記憶しておく（翌月切り替えの判定用）
+      // ※セレクタは一般的なカレンダーのヘッダーを想定しています（ズレがある場合は要調整）
+      const getCalendarTitle = async () => {
+        return await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '');
+      };
+      
+      const currentMonthTitle = await getCalendarTitle();
+      console.log(`  -> 当月のスキャンを開始します（現在の画面表示: ${currentMonthTitle.trim()}）`);
+      
+      const currentMonthResults = await scanCurrentCalendarPage();
+      
+      if (currentMonthResults.length > 0) {
         currentMailLines.push(`【${target.name}】`);
-        currentMailLines.push(parkVacantLines.join('\n'));
+        currentMailLines.push(currentMonthResults.join('\n'));
         currentMailLines.push('');
       }
-    } catch (err) {
+
+      // --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
+      if (todayNum >= 22) {
+        // 「次月→」というテキストを含むリンクボタンを探してクリック
+        const nextMonthButton = page.locator('.status-calendar-box a:has-text("次月"), .status-calendar-box button:has-text("次月")').first();
+        
+        if (await nextMonthButton.count() > 0) {
+          console.log('  -> 【22日以降】翌月予約が解放されているため「次月→」をクリックします...');
+          await nextMonthButton.click();
+
+          // 重要：上部の「年月表示」が当月のテキストから変化するまで最大30秒じっと待つ（古い表示での誤検知を防ぐ）
+          console.log('  -> 翌月カレンダーへ切り替え中... 年月表示の更新を待機します（最大30秒）');
+          await page.waitForFunction(
+            (oldTitle) => {
+              const el = document.querySelector('.status-calendar-box .calendar-title') || document.querySelector('.status-calendar-box text');
+              return el && el.innerText !== oldTitle;
+            },
+            currentMonthTitle,
+            { timeout: 30000 }
+          ).catch(() => {
+            console.log('  -> [警告] 年月表示の切り替え確認がタイムアウトしました。そのままスキャンを試みます。');
+          });
+
+          // 切り替わり後の安全マージンとして2秒待機
+          await page.waitForTimeout(2000);
+          
+          const nextMonthTitle = await getCalendarTitle();
+          console.log(`  -> 翌月のスキャンを開始します（現在の画面表示: ${nextMonthTitle.trim()}）`);
+
+          const nextMonthResults = await scanCurrentCalendarPage();
+          
+          if (nextMonthResults.length > 0) {
+            // すでに当月分で施設名がメール線に入っていない場合のみ施設名を追加
+            if (currentMonthResults.length === 0) {
+              currentMailLines.push(`【${target.name}】`);
+            }
+            currentMailLines.push(nextMonthResults.join('\n'));
+            currentMailLines.push('');
+          }
+        } else {
+          console.log('  -> [注意] 「次月」ボタンが見つからなかったため、翌月のスキャンをスキップします。');
+        }
+      } else {
+        console.log(`  -> 今日は ${todayNum} 日です（21日以下）。当月のみチェックし、翌月スキャンはスキップします。`);
+      }
+
+    } // データの読み込みとスキャン(try) の終わり
+    catch (err) {
       console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`, err);
     } finally {
       await page.close();
