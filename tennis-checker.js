@@ -3,7 +3,7 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 
-// 対象施設リスト（全13施設）
+// 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
 const TARGETS = [
   { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
   { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
@@ -40,9 +40,9 @@ function isHoliday(date) {
   const browser = await chromium.launch({ headless: true });
   const currentMailLines = [];
 
-// 実行時の「今日」の日付情報を取得（GitHub環境でも強制的に日本時間にする）
-const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
+  // 実行時の「今日」の日付情報を取得（GitHub環境でも強制的に日本時間にする）
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+  const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
 
   for (const target of TARGETS) {
     console.log(`[巡回] ${target.name} を確認中...`);
@@ -112,10 +112,14 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
               // 今日より前の過去の日付は除外
               if (checkDate < todayObj) continue; 
 
-              console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
               const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
-              const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
-              parkVacantLines.push(`${targetMonth}月${targetDay}日（${label}）[${altText}]`);
+
+              // ⭕ 変更点：土日祝のみを対象にするフィルターを完璧に適用（インデント等も自動調整済）
+              if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
+                console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
+                const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
+                parkVacantLines.push(`${targetMonth}月${targetDay}日（${label}）[${altText}]`);
+              }
             }
           }
         }
@@ -123,8 +127,6 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
       }
 
       // --- 【ステップA】当月分のカレンダーをスキャン ---
-      // カレンダー上部にある現在の「年・月」テキストを取得して記憶しておく（翌月切り替えの判定用）
-      // ※セレクタは一般的なカレンダーのヘッダーを想定しています（ズレがある場合は要調整）
       const getCalendarTitle = async () => {
         return await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '');
       };
@@ -142,14 +144,12 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
 
       // --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
       if (todayNum >= 22) {
-        // 「次月→」というテキストを含むリンクボタンを探してクリック
         const nextMonthButton = page.locator('.status-calendar-box a:has-text("次月"), .status-calendar-box button:has-text("次月")').first();
         
         if (await nextMonthButton.count() > 0) {
           console.log('  -> 【22日以降】翌月予約が解放されているため「次月→」をクリックします...');
           await nextMonthButton.click();
 
-          // 重要：上部の「年月表示」が当月のテキストから変化するまで最大30秒じっと待つ（古い表示での誤検知を防ぐ）
           console.log('  -> 翌月カレンダーへ切り替え中... 年月表示の更新を待機します（最大30秒）');
           await page.waitForFunction(
             (oldTitle) => {
@@ -162,7 +162,6 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
             console.log('  -> [警告] 年月表示の切り替え確認がタイムアウトしました。そのままスキャンを試みます。');
           });
 
-          // 切り替わり後の安全マージンとして2秒待機
           await page.waitForTimeout(2000);
           
           const nextMonthTitle = await getCalendarTitle();
@@ -171,7 +170,6 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
           const nextMonthResults = await scanCurrentCalendarPage();
           
           if (nextMonthResults.length > 0) {
-            // すでに当月分で施設名がメール線に入っていない場合のみ施設名を追加
             if (currentMonthResults.length === 0) {
               currentMailLines.push(`【${target.name}】`);
             }
@@ -185,8 +183,7 @@ const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
         console.log(`  -> 今日は ${todayNum} 日です（21日以下）。当月のみチェックし、翌月スキャンはスキップします。`);
       }
 
-    } // データの読み込みとスキャン(try) の終わり
-    catch (err) {
+    } catch (err) {
       console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`, err);
     } finally {
       await page.close();
