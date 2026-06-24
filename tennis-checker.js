@@ -1,9 +1,21 @@
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
-// 【テスト用】対象施設リスト（テスト時間を短縮するため、最初の1施設のみに制限しています）
+// 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
 const TARGETS = [
-  { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' }
+  { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
+ // { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
+ // { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
+//  { name: '木場公園', purpose: '1000_1030', park: '1060' },
+//  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
+//  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+//  { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
+//  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
+//  { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
+//{ name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
+//  { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
+//  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
+//  { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
@@ -119,8 +131,32 @@ async function sendImmediateMail(targetName, vacantLines) {
       
       await page.waitForTimeout(1000); // 描画直後の安定化待機
 
+      // カレンダー内のセルの過半数から、現在実際に表示されている年月（YYYYMM）を精密判定する関数
+      const getMajorityYearMonth = async () => {
+        const cells = await page.$$('#month-info td[id^="month_"]');
+        const ymCounts = {};
+        for (const cell of cells) {
+          const id = await cell.getAttribute('id');
+          if (id) {
+            const ym = id.replace('month_', '').slice(0, 6); // "202606"
+            if (ym && ym.length === 6) {
+              ymCounts[ym] = (ymCounts[ym] || 0) + 1;
+            }
+          }
+        }
+        let maxYM = '';
+        let maxCount = 0;
+        for (const [ym, count] of Object.entries(ymCounts)) {
+          if (count > maxCount) {
+            maxCount = count;
+            maxYM = ym;
+          }
+        }
+        return maxYM;
+      };
+
       // カレンダー内の空き枠を解析する共通関数
-      async function scanCurrentCalendarPage() {
+      async function scanCurrentCalendarPage(activeYM) {
         const parkVacantLines = [];
         const cells = await page.$$('#month-info td');
 
@@ -128,10 +164,15 @@ async function sendImmediateMail(targetName, vacantLines) {
           const id = await cell.getAttribute('id');
           if (!id || !id.startsWith('month_')) continue;
 
-          const dateStr = id.replace('month_', '');
+          const dateStr = id.replace('month_', ''); // "20260625"
           const targetYear = parseInt(dateStr.slice(0, 4), 10);
           const targetMonth = parseInt(dateStr.slice(4, 6), 10);
           const targetDay = parseInt(dateStr.slice(6, 8), 10);
+          
+          const cellYM = dateStr.slice(0, 6); // "202606"
+          
+          // 【超重要】アクティブな年月（現在表示している月）と一致しない端数の日（前月分・翌月分）はスキャンから完全に除外
+          if (activeYM && cellYM !== activeYM) continue;
 
           const imgElement = await cell.$('img');
           if (imgElement) {
@@ -159,24 +200,15 @@ async function sendImmediateMail(targetName, vacantLines) {
         return parkVacantLines;
       }
 
-      // 現在表示されているカレンダーの年月（YYYYMM）を取得する関数
-      const getDisplayedYearMonth = async () => {
-        const firstCell = await page.$('#month-info td[id^="month_"]');
-        if (firstCell) {
-          const id = await firstCell.getAttribute('id'); // "month_20260601"
-          return id ? id.slice(6, 12) : ''; // "202606"
-        }
-        return '';
-      };
-
       // この施設で見つかったすべての空き情報を保持する配列
       let thisParkVacantLines = [];
 
       // --- 【ステップA】当月分のカレンダーをスキャン ---
+      const activeCurrentYM = await getMajorityYearMonth();
       const currentMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '当月');
-      console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}）`);
+      console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}, 年月コード: ${activeCurrentYM}）`);
       
-      const currentMonthResults = await scanCurrentCalendarPage();
+      const currentMonthResults = await scanCurrentCalendarPage(activeCurrentYM);
       if (currentMonthResults.length > 0) {
         thisParkVacantLines = thisParkVacantLines.concat(currentMonthResults);
       }
@@ -187,43 +219,40 @@ async function sendImmediateMail(targetName, vacantLines) {
         
         if (await nextMonthButton.count() > 0) {
           // クリック前の表示年月を取得（例: "202606"）
-          const beforeYM = await getDisplayedYearMonth();
-          console.log(`  -> 【22日以降】翌月スキャンに移行。現在の年月コード: ${beforeYM}`);
+          const beforeYM = await getMajorityYearMonth();
+          console.log(`  -> 【22日以降】翌月スキャンに移行。クリック前の年月コード: ${beforeYM}`);
 
           console.log('  -> 「次月→」ボタンをクリックします...');
           await nextMonthButton.evaluate(el => el.click());
 
-          console.log('  -> 翌月カレンダーへ切り替え中... (データ変化をリアルタイム監視)');
+          console.log('  -> 翌月カレンダーへ切り替え中... (過半数セルが新しい年月に入れ替わるのを監視)');
           
-          // IDが切り替わる（"202606" から "202607" などに変化する）のを精密に待つ
+          // ID（過半数のYM）が切り替わる（"202606" から "202607" などに完全に変化する）のを精密に待つ
           let changed = false;
-          try {
-            await page.waitForFunction(
-              (oldYM) => {
-                const cell = document.querySelector('#month-info td[id^="month_"]');
-                if (!cell) return false;
-                const id = cell.getAttribute('id');
-                const currentYM = id ? id.slice(6, 12) : '';
-                return currentYM && currentYM !== oldYM;
-              },
-              beforeYM,
-              { timeout: 35000 }
-            );
-            changed = true;
-            console.log('  -> [検出成功] カレンダーが翌月に切り替わりました。');
-          } catch (e) {
-            console.log('  -> [警告] 切り替え待機がタイムアウトしました。フォールバック待機します。');
-            await page.waitForTimeout(4000);
+          const startTime = Date.now();
+          while (Date.now() - startTime < 35000) { // 最大35秒待機
+            await page.waitForTimeout(1000); // 1秒ごとにポーリング
+            const currentYM = await getMajorityYearMonth();
+            if (currentYM && currentYM !== beforeYM) {
+              changed = true;
+              break;
+            }
           }
 
           if (changed) {
-            await page.waitForTimeout(1500); // 描画安定のための待機
+            console.log('  -> [検出成功] カレンダーの切り替えを確認。');
+            // 【超重要】重いアイコン画像の描画が完全に同期して追いつくまで「2秒」安全に待機します
+            await page.waitForTimeout(2000);
+          } else {
+            console.log('  -> [警告] 切り替え待機がタイムアウトしました。フォールバック待機します。');
+            await page.waitForTimeout(4000);
           }
           
+          const activeNextYM = await getMajorityYearMonth();
           const nextMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '翌月');
-          console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}）`);
+          console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}, 年月コード: ${activeNextYM}）`);
 
-          const nextMonthResults = await scanCurrentCalendarPage();
+          const nextMonthResults = await scanCurrentCalendarPage(activeNextYM);
           if (nextMonthResults.length > 0) {
             thisParkVacantLines = thisParkVacantLines.concat(nextMonthResults);
           }
@@ -234,7 +263,7 @@ async function sendImmediateMail(targetName, vacantLines) {
         console.log(`  -> 今日は ${todayNum} 日です（21日以下）。翌月スキャンはスキップします。`);
       }
 
-      // --- 【ステップC】この施設で空きが見つかっていれば、その場ですぐメール送信 ---
+      // --- 【ステップC】この施設で空きが見つかっていて、かつ有効なデータがあれば即時メール送信 ---
       if (thisParkVacantLines.length > 0) {
         console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
         await sendImmediateMail(target.name, thisParkVacantLines);
@@ -251,5 +280,5 @@ async function sendImmediateMail(targetName, vacantLines) {
 
   await browser.close();
   console.log('\n==================================================');
-  console.log('テスト巡回チェックが終了しました。（1施設のみ）');
+  console.log('すべての施設の巡回チェックが終了しました。');
 })();
