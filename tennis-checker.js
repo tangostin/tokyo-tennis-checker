@@ -8,7 +8,7 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' }, // 元のリストから維持
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
   { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
@@ -79,7 +79,7 @@ async function sendImmediateMail(targetName, vacantLines) {
     for (let retry = 1; retry <= 3; retry++) {
       try {
         await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 20000 });
-        await page.waitForSelector('#purpose-home', { timeout: 5000 });
+        await page.waitForSelector('#purpose-home', { timeout: 8000 });
         
         await page.selectOption('#purpose-home', target.purpose);
         await page.waitForTimeout(500);
@@ -87,7 +87,8 @@ async function sendImmediateMail(targetName, vacantLines) {
         await page.waitForTimeout(500);
         await page.click('#btn-go');
         
-        await page.waitForSelector('.status-calendar-box', { timeout: 10000 });
+        // カレンダー大枠が表示されるのを待つ
+        await page.waitForSelector('.status-calendar-box', { timeout: 12000 });
         success = true;
         break; 
       } catch (e) {
@@ -103,14 +104,21 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 1. 詳細表示（月表示）ボタンをクリックしてカレンダーを展開
+      // 1. 詳細表示（月表示）ボタンを待機してクリック
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
-      console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
-      await expandButton.click();
+      await expandButton.scrollIntoViewIfNeeded().catch(() => {});
       
-      // 月表示テーブルが最初に出現するのを待つ
-      await page.waitForSelector('#month-info', { timeout: 30000 });
-      await page.waitForTimeout(1500);
+      console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
+      // force: true で非表示扱いでも強制クリック、かつ2回トライ
+      await expandButton.click({ force: true, timeout: 10000 }).catch(async () => {
+        console.log('  -> [リトライ] 詳細表示ボタンの通常クリックが詰まったため、再度クリックを試みます...');
+        await expandButton.click({ force: true });
+      });
+      
+      // 2. 月表示テーブルが「実際に表示状態（visible）」になるまで待つ
+      // 非常に遅いサイトのため最大45秒まで許容（描画され次第、即座に次の処理に進みます）
+      await page.waitForSelector('#month-info', { state: 'visible', timeout: 45000 });
+      await page.waitForTimeout(1000); // 描画直後のスクリプト安定化のための微小待機
 
       // カレンダー内の空き枠を解析する共通関数
       async function scanCurrentCalendarPage() {
@@ -152,15 +160,22 @@ async function sendImmediateMail(targetName, vacantLines) {
         return parkVacantLines;
       }
 
+      // 現在表示されているカレンダーの年月（YYYYMM）を取得する関数
+      // 確実に「次月」に切り替わったかを検知するために使用します
+      const getDisplayedYearMonth = async () => {
+        const firstCell = await page.$('#month-info td[id^="month_"]');
+        if (firstCell) {
+          const id = await firstCell.getAttribute('id'); // "month_20260601"
+          return id ? id.slice(6, 12) : ''; // "202606"
+        }
+        return '';
+      };
+
       // この施設で見つかったすべての空き情報を保持する配列
       let thisParkVacantLines = [];
 
       // --- 【ステップA】当月分のカレンダーをスキャン ---
-      const getCalendarTitle = async () => {
-        return await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '');
-      };
-      
-      const currentMonthTitle = await getCalendarTitle();
+      const currentMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '当月');
       console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}）`);
       
       const currentMonthResults = await scanCurrentCalendarPage();
@@ -173,24 +188,41 @@ async function sendImmediateMail(targetName, vacantLines) {
         const nextMonthButton = page.locator('.status-calendar-box a:has-text("次月"), .status-calendar-box button:has-text("次月")').first();
         
         if (await nextMonthButton.count() > 0) {
-          console.log('  -> 【22日以降】翌月予約が解放されているため「次月→」をクリックします...');
-          await nextMonthButton.click();
+          // クリック前の表示年月を取得（例: "202606"）
+          const beforeYM = await getDisplayedYearMonth();
+          console.log(`  -> 【22日以降】翌月スキャンに移行。現在の年月コード: ${beforeYM}`);
 
-          console.log('  -> 翌月カレンダーへ切り替え中...');
-          await page.waitForFunction(
-            (oldTitle) => {
-              const el = document.querySelector('.status-calendar-box .calendar-title') || document.querySelector('.status-calendar-box text');
-              return el && el.innerText !== oldTitle;
-            },
-            currentMonthTitle,
-            { timeout: 20000 }
-          ).catch(() => {
-            console.log('  -> [警告] 切り替え待機がタイムアウトしました。そのままスキャンします。');
-          });
+          console.log('  -> 「次月→」ボタンをクリックします...');
+          await nextMonthButton.click({ force: true });
 
-          await page.waitForTimeout(1500);
+          console.log('  -> 翌月カレンダーへ切り替え中... (データ変化をリアルタイム監視)');
           
-          const nextMonthTitle = await getCalendarTitle();
+          // IDが切り替わる（"202606" から "202607" などに変化する）のを精密に待つ
+          let changed = false;
+          try {
+            await page.waitForFunction(
+              (oldYM) => {
+                const cell = document.querySelector('#month-info td[id^="month_"]');
+                if (!cell) return false;
+                const id = cell.getAttribute('id');
+                const currentYM = id ? id.slice(6, 12) : '';
+                return currentYM && currentYM !== oldYM;
+              },
+              beforeYM,
+              { timeout: 30000 }
+            );
+            changed = true;
+            console.log('  -> [検出成功] カレンダーが翌月に切り替わりました。');
+          } catch (e) {
+            console.log('  -> [警告] 切り替え待機がタイムアウトしました。フォールバック待機します。');
+            await page.waitForTimeout(3000);
+          }
+
+          if (changed) {
+            await page.waitForTimeout(1000); // 描画安定のための短い調整
+          }
+          
+          const nextMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '翌月');
           console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}）`);
 
           const nextMonthResults = await scanCurrentCalendarPage();
