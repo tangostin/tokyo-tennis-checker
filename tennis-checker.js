@@ -4,18 +4,18 @@ const nodemailer = require('nodemailer');
 // 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
 const TARGETS = [
   { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
-//  { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
-//  { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
-//  { name: '木場公園', purpose: '1000_1030', park: '1060' },
-//  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-//　{ name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
-//　{ name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
-//  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
-//  { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
-//  { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
-//  { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
-//  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
-//  { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
+  { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
+  { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
+  { name: '木場公園', purpose: '1000_1030', park: '1060' },
+  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
+　{ name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+　{ name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
+  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
+  { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
+  { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
+  { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
+  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
+  { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
