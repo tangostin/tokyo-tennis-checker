@@ -1,7 +1,5 @@
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
 
 // 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
 const TARGETS = [
@@ -10,7 +8,7 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' }, // 元のリストから維持
   { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
@@ -21,8 +19,17 @@ const TARGETS = [
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
-const CACHE_FILE = path.join(__dirname, 'last_vacant.txt');
 
+// メール送信用トランスポートの作成
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD
+  }
+});
+
+// 祝日判定関数
 function isHoliday(date) {
   const y = date.getFullYear();
   const m = date.getMonth() + 1;
@@ -36,16 +43,35 @@ function isHoliday(date) {
   return holidays2026.includes(`${y}-${m}-${d}`);
 }
 
-(async () => {
-  const browser = await chromium.launch({ headless: true });
-  const currentMailLines = [];
+// 個別に即時メールを送信する関数
+async function sendImmediateMail(targetName, vacantLines) {
+  const mailText = `【${targetName}】に空きが見つかりました！\n\n` + vacantLines.join('\n') + `\n\n${SITE_URL}`;
+  
+  try {
+    console.log(`  => [メール送信中] ${targetName} の空き通知を送信します...`);
+    await transporter.sendMail({
+      from: process.env.GMAIL_USER,
+      to: process.env.NOTIFY_EMAIL,
+      subject: `【速報】空きあり：${targetName}`,
+      text: mailText
+    });
+    console.log(`  => [メール送信完了] ${targetName} の通知メールを送信しました。`);
+  } catch (mailErr) {
+    console.error(`  => [メール送信エラー] ${targetName} の送信に失敗しました:`, mailErr);
+  }
+}
 
-  // 実行時の「今日」の日付情報を取得（GitHub環境でも強制的に日本時間にする）
+(async () => {
+  // ブラウザの起動
+  const browser = await chromium.launch({ headless: true });
+
+  // 実行時の「今日」の日付情報を取得（GitHub Actions等の環境でも日本時間にする）
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
   const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
 
   for (const target of TARGETS) {
-    console.log(`[巡回] ${target.name} を確認中...`);
+    console.log(`\n==================================================`);
+    console.log(`[巡回開始] ${target.name} を確認中...`);
     const page = await browser.newPage();
     let success = false;
 
@@ -84,9 +110,9 @@ function isHoliday(date) {
       
       // 月表示テーブルが最初に出現するのを待つ
       await page.waitForSelector('#month-info', { timeout: 30000 });
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1500);
 
-      // カレンダー内の空き枠を解析する共通関数（当月・翌月の両方で使い回します）
+      // カレンダー内の空き枠を解析する共通関数
       async function scanCurrentCalendarPage() {
         const parkVacantLines = [];
         const cells = await page.$$('#month-info td');
@@ -114,7 +140,7 @@ function isHoliday(date) {
 
               const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
 
-              // ⭕ 変更点：土日祝のみを対象にするフィルターを完璧に適用（インデント等も自動調整済）
+              // 土日祝のみを対象にするフィルター
               if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
                 console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
                 const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
@@ -126,20 +152,20 @@ function isHoliday(date) {
         return parkVacantLines;
       }
 
+      // この施設で見つかったすべての空き情報を保持する配列
+      let thisParkVacantLines = [];
+
       // --- 【ステップA】当月分のカレンダーをスキャン ---
       const getCalendarTitle = async () => {
         return await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '');
       };
       
       const currentMonthTitle = await getCalendarTitle();
-      console.log(`  -> 当月のスキャンを開始します（現在の画面表示: ${currentMonthTitle.trim()}）`);
+      console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}）`);
       
       const currentMonthResults = await scanCurrentCalendarPage();
-      
       if (currentMonthResults.length > 0) {
-        currentMailLines.push(`【${target.name}】`);
-        currentMailLines.push(currentMonthResults.join('\n'));
-        currentMailLines.push('');
+        thisParkVacantLines = thisParkVacantLines.concat(currentMonthResults);
       }
 
       // --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
@@ -150,37 +176,40 @@ function isHoliday(date) {
           console.log('  -> 【22日以降】翌月予約が解放されているため「次月→」をクリックします...');
           await nextMonthButton.click();
 
-          console.log('  -> 翌月カレンダーへ切り替え中... 年月表示の更新を待機します（最大30秒）');
+          console.log('  -> 翌月カレンダーへ切り替え中...');
           await page.waitForFunction(
             (oldTitle) => {
               const el = document.querySelector('.status-calendar-box .calendar-title') || document.querySelector('.status-calendar-box text');
               return el && el.innerText !== oldTitle;
             },
             currentMonthTitle,
-            { timeout: 30000 }
+            { timeout: 20000 }
           ).catch(() => {
-            console.log('  -> [警告] 年月表示の切り替え確認がタイムアウトしました。そのままスキャンを試みます。');
+            console.log('  -> [警告] 切り替え待機がタイムアウトしました。そのままスキャンします。');
           });
 
-          await page.waitForTimeout(2000);
+          await page.waitForTimeout(1500);
           
           const nextMonthTitle = await getCalendarTitle();
-          console.log(`  -> 翌月のスキャンを開始します（現在の画面表示: ${nextMonthTitle.trim()}）`);
+          console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}）`);
 
           const nextMonthResults = await scanCurrentCalendarPage();
-          
           if (nextMonthResults.length > 0) {
-            if (currentMonthResults.length === 0) {
-              currentMailLines.push(`【${target.name}】`);
-            }
-            currentMailLines.push(nextMonthResults.join('\n'));
-            currentMailLines.push('');
+            thisParkVacantLines = thisParkVacantLines.concat(nextMonthResults);
           }
         } else {
           console.log('  -> [注意] 「次月」ボタンが見つからなかったため、翌月のスキャンをスキップします。');
         }
       } else {
-        console.log(`  -> 今日は ${todayNum} 日です（21日以下）。当月のみチェックし、翌月スキャンはスキップします。`);
+        console.log(`  -> 今日は ${todayNum} 日です（21日以下）。翌月スキャンはスキップします。`);
+      }
+
+      // --- 【ステップC】この施設で空きが見つかっていれば、その場ですぐメール送信 ---
+      if (thisParkVacantLines.length > 0) {
+        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
+        await sendImmediateMail(target.name, thisParkVacantLines);
+      } else {
+        console.log(`  -> 【空きなし】${target.name} に対象日の空きはありませんでした。`);
       }
 
     } catch (err) {
@@ -191,40 +220,6 @@ function isHoliday(date) {
   }
 
   await browser.close();
-
-  // メール本文の最終整形
-  const currentVacantText = currentMailLines.join('\n').trim();
-  const fullMailText = currentVacantText ? `${currentVacantText}\n\n${SITE_URL}` : SITE_URL;
-
-  // --- 差分チェックのロジック ---
-  let isFirstRun = !fs.existsSync(CACHE_FILE);
-  let lastVacantText = '';
-  if (!isFirstRun) {
-    lastVacantText = fs.readFileSync(CACHE_FILE, 'utf8').trim();
-  }
-
-  if (isFirstRun || currentVacantText !== lastVacantText) {
-    console.log(isFirstRun ? '初回実行のためメールを送信します。' : '空き状況に変化（差分）があったため、メールを送信します。');
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD
-      }
-    });
-
-    await transporter.sendMail({
-      from: process.env.GMAIL_USER,
-      to: process.env.NOTIFY_EMAIL,
-      subject: '【速報】テニスコート月間空き状況',
-      text: fullMailText
-    });
-
-    console.log('メール送信完了。');
-  } else {
-    console.log('前回から空き状況に変化がありません。メール送信をスキップします。');
-  }
-
-  fs.writeFileSync(CACHE_FILE, currentVacantText, 'utf8');
+  console.log('\n==================================================');
+  console.log('すべての施設の巡回チェックが終了しました。');
 })();
