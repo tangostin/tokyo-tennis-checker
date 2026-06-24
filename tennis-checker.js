@@ -8,8 +8,8 @@ const TARGETS = [
   { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-　{ name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
-　{ name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
+  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
+  { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
@@ -129,7 +129,9 @@ async function sendImmediateMail(targetName, vacantLines) {
         await page.waitForSelector('#month-info', { state: 'visible', timeout: 25000 });
       }
       
-      await page.waitForTimeout(1000); // 描画直後の安定化待機
+      console.log('  -> 月表示テーブルを検出。描画とデータ通信の安定化のため2.5秒待機します...');
+      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
 
       // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を瞬時に精密特定する超高速化関数
       const getActiveYearMonth = async () => {
@@ -157,7 +159,7 @@ async function sendImmediateMail(targetName, vacantLines) {
           
           const cellYM = dateStr.slice(0, 6); // "202606"
           
-          // 端数の日が存在しない前提ですが、不慮のノイズ防止用に安全策として現アクティブ年月との一致を確認
+          // 現アクティブ年月と一致しない端数の日（不慮のノイズ）はスキャンから完全に除外
           if (activeYM && cellYM !== activeYM) continue;
 
           const imgElement = await cell.$('img');
@@ -226,12 +228,14 @@ async function sendImmediateMail(targetName, vacantLines) {
           }
 
           if (changed) {
-            console.log('  -> [検出成功] カレンダーの切り替えを確認。');
-            // 重いアイコン画像の描画が完全に同期して追いつくまで「2秒」安全に待機
-            await page.waitForTimeout(2000);
-          } else {
-            console.log('  -> [警告] 切り替え待機がタイムアウトしました。フォールバック待機します。');
+            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信・描画完了のため4秒間安全に待機します...');
+            // Ajax通信リクエストがすべて終了するのを待機
+            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+            // 重い空き状況画像アセットが完全に置き換わるまで4.0秒の安全マージンを適用
             await page.waitForTimeout(4000);
+          } else {
+            console.log('  -> [警告] 切り替え待機がタイムアウトしました。長めのフォールバック待機（6秒）を行います。');
+            await page.waitForTimeout(6000);
           }
           
           const activeNextYM = await getActiveYearMonth();
