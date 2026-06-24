@@ -1,21 +1,9 @@
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
-// 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
+// 【テスト用】対象施設リスト（テスト時間を短縮するため、最初の1施設のみに制限しています）
 const TARGETS = [
-  { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
-  { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
-  { name: '猿江恩賜公園', purpose: '1000_1030', park: '1040' },
-  { name: '木場公園', purpose: '1000_1030', park: '1060' },
-  { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
-  { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
-  { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
-  { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
-  { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
-  { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
-  { name: '大井ふ頭海浜公園A（ハード）', purpose: '1000_1020', park: '1310' },
-  { name: '大井ふ頭海浜公園B（ハード）', purpose: '1000_1020', park: '1315' },
-  { name: '有明テニス屋外ハードコート', purpose: '1000_1020', park: '1350' }
+  { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' }
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
@@ -78,17 +66,17 @@ async function sendImmediateMail(targetName, vacantLines) {
     // TOPでのセレクトボックス呼び出しを最大3回リトライ
     for (let retry = 1; retry <= 3; retry++) {
       try {
-        await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 20000 });
-        await page.waitForSelector('#purpose-home', { timeout: 8000 });
+        await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 25000 });
+        await page.waitForSelector('#purpose-home', { timeout: 10000 });
         
         await page.selectOption('#purpose-home', target.purpose);
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(600);
         await page.selectOption('#bname-home', target.park);
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(600);
         await page.click('#btn-go');
         
         // カレンダー大枠が表示されるのを待つ
-        await page.waitForSelector('.status-calendar-box', { timeout: 12000 });
+        await page.waitForSelector('.status-calendar-box', { timeout: 15000 });
         success = true;
         break; 
       } catch (e) {
@@ -104,21 +92,32 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 1. 詳細表示（月表示）ボタンを待機してクリック
+      // 1. 詳細表示（月表示）ボタンを待機
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
       await expandButton.scrollIntoViewIfNeeded().catch(() => {});
       
-      console.log('  -> 「詳細表示（月表示）」ボタンをクリックします...');
-      // force: true で非表示扱いでも強制クリック、かつ2回トライ
-      await expandButton.click({ force: true, timeout: 10000 }).catch(async () => {
-        console.log('  -> [リトライ] 詳細表示ボタンの通常クリックが詰まったため、再度クリックを試みます...');
-        await expandButton.click({ force: true });
-      });
+      // 現在アコーディオンが開いているかどうか（aria-expanded）を確認
+      const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
       
-      // 2. 月表示テーブルが「実際に表示状態（visible）」になるまで待つ
-      // 非常に遅いサイトのため最大45秒まで許容（描画され次第、即座に次の処理に進みます）
-      await page.waitForSelector('#month-info', { state: 'visible', timeout: 45000 });
-      await page.waitForTimeout(1000); // 描画直後のスクリプト安定化のための微小待機
+      if (isExpanded === 'false') {
+        console.log('  -> 「詳細表示（月表示）」ボタンをクリックして展開します...');
+        // JSでの直接クリックにより、重いローディングマスクを完全にバイパスして確実に実行
+        await expandButton.evaluate(el => el.click());
+      } else {
+        console.log('  -> カレンダーは既に展開された状態です。');
+      }
+      
+      // 2. 月表示テーブルが「実際に表示（visible）」になるまで待機（超堅牢設計）
+      try {
+        await page.waitForSelector('#month-info', { state: 'visible', timeout: 25000 });
+      } catch (timeoutErr) {
+        console.log('  -> [通信遅延] 月表示テーブルのロードに時間がかかっています。再度展開を試みます...');
+        // 万が一クリックが不発だった、または通信が詰まった場合のフォールバック展開
+        await expandButton.evaluate(el => el.click()).catch(() => {});
+        await page.waitForSelector('#month-info', { state: 'visible', timeout: 25000 });
+      }
+      
+      await page.waitForTimeout(1000); // 描画直後の安定化待機
 
       // カレンダー内の空き枠を解析する共通関数
       async function scanCurrentCalendarPage() {
@@ -161,7 +160,6 @@ async function sendImmediateMail(targetName, vacantLines) {
       }
 
       // 現在表示されているカレンダーの年月（YYYYMM）を取得する関数
-      // 確実に「次月」に切り替わったかを検知するために使用します
       const getDisplayedYearMonth = async () => {
         const firstCell = await page.$('#month-info td[id^="month_"]');
         if (firstCell) {
@@ -193,7 +191,7 @@ async function sendImmediateMail(targetName, vacantLines) {
           console.log(`  -> 【22日以降】翌月スキャンに移行。現在の年月コード: ${beforeYM}`);
 
           console.log('  -> 「次月→」ボタンをクリックします...');
-          await nextMonthButton.click({ force: true });
+          await nextMonthButton.evaluate(el => el.click());
 
           console.log('  -> 翌月カレンダーへ切り替え中... (データ変化をリアルタイム監視)');
           
@@ -209,17 +207,17 @@ async function sendImmediateMail(targetName, vacantLines) {
                 return currentYM && currentYM !== oldYM;
               },
               beforeYM,
-              { timeout: 30000 }
+              { timeout: 35000 }
             );
             changed = true;
             console.log('  -> [検出成功] カレンダーが翌月に切り替わりました。');
           } catch (e) {
             console.log('  -> [警告] 切り替え待機がタイムアウトしました。フォールバック待機します。');
-            await page.waitForTimeout(3000);
+            await page.waitForTimeout(4000);
           }
 
           if (changed) {
-            await page.waitForTimeout(1000); // 描画安定のための短い調整
+            await page.waitForTimeout(1500); // 描画安定のための待機
           }
           
           const nextMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '翌月');
@@ -253,5 +251,5 @@ async function sendImmediateMail(targetName, vacantLines) {
 
   await browser.close();
   console.log('\n==================================================');
-  console.log('すべての施設の巡回チェックが終了しました。');
+  console.log('テスト巡回チェックが終了しました。（1施設のみ）');
 })();
