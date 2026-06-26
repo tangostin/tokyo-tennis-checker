@@ -9,7 +9,7 @@ const TARGETS = [
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
   { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
-  { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
+  { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
