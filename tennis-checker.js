@@ -1,3 +1,4 @@
+```javascript
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
@@ -119,21 +120,17 @@ async function sendImmediateMail(targetName, vacantLines) {
         console.log('  -> カレンダーは既に展開された状態です。');
       }
       
-      // 2. 月表示テーブルが「実際に表示（visible）」になるまで待機（超堅牢設計）
-      try {
-        await page.waitForSelector('#month-info', { state: 'visible', timeout: 25000 });
-      } catch (timeoutErr) {
-        console.log('  -> [通信遅延] 月表示テーブルのロードに時間がかかっています。再度展開を試みます...');
-        // 万が一クリックが不発だった、または通信が詰まった場合のフォールバック展開
-        await expandButton.evaluate(el => el.click()).catch(() => {});
-        await page.waitForSelector('#month-info', { state: 'visible', timeout: 25000 });
-      }
+      // 2. 月表示テーブルが「実際に表示（visible）」になるまで待機
+      // 有明テニスの莫大な面数データ量に耐えられるよう、タイムアウトを40秒に延長。
+      // 【重要】待機エラーになっても二重クリックをしないように、waitForSelector のみを愚直に行います。
+      console.log('  -> 月表示テーブルが画面に描画されるのを待機しています（最大40秒）...');
+      await page.waitForSelector('#month-info', { state: 'visible', timeout: 40000 });
       
       console.log('  -> 月表示テーブルを検出。描画とデータ通信の安定化のため2.5秒待機します...');
       await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
 
-      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を瞬時に精密特定する超高速化関数
+      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を精密特定する関数
       const getActiveYearMonth = async () => {
         const firstCell = await page.$('#month-info td[id^="month_"]');
         if (firstCell) {
@@ -215,11 +212,11 @@ async function sendImmediateMail(targetName, vacantLines) {
 
           console.log('  -> 翌月カレンダーへ切り替え中... (最初の日付セルが新しい年月に入れ替わるのを監視)');
           
-          // 最初の日付セルの年月が新しい年月（例: "202607"）へ切り替わった瞬間を精密に待つ（超高速化）
+          // 最初の日付セルの年月が新しい年月（例: "202607"）へ切り替わった瞬間を精密に待つ
           let changed = false;
           const startTime = Date.now();
-          while (Date.now() - startTime < 35000) { // 最大35秒待機
-            await page.waitForTimeout(500); // 500ms（0.5秒）ごとに超高速ポーリング
+          while (Date.now() - startTime < 40000) { // 最大40秒待機（有明対応）
+            await page.waitForTimeout(1000); // 1.0秒ポーリングに落としてブラウザの負荷をさらに低減
             const currentYM = await getActiveYearMonth();
             if (currentYM && currentYM !== beforeYM) {
               changed = true;
@@ -228,7 +225,7 @@ async function sendImmediateMail(targetName, vacantLines) {
           }
 
           if (changed) {
-            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信・描画完了のため4秒間安全に待機します...');
+            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信・描画完了のため4.0秒間安全に待機します...');
             // Ajax通信リクエストがすべて終了するのを待機
             await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
             // 重い空き状況画像アセットが完全に置き換わるまで4.0秒の安全マージンを適用
@@ -272,3 +269,5 @@ async function sendImmediateMail(targetName, vacantLines) {
   console.log('\n==================================================');
   console.log('すべての施設の巡回チェックが終了しました。');
 })();
+
+```
