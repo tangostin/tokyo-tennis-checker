@@ -1,4 +1,3 @@
-```javascript
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
@@ -41,25 +40,24 @@ function isHoliday(date) {
     '2026-7-20', '2026-8-11', '2026-9-21', '2026-9-22', '2026-9-23',
     '2026-10-12', '2026-11-3', '2026-11-23'
   ];
-  // バッククォートによるテンプレートリテラルを通常のプラス連結に修正
-  return holidays2026.includes(y + '-' + m + '-' + d);
+  return holidays2026.includes(`${y}-${m}-${d}`);
 }
 
 // 個別に即時メールを送信する関数
 async function sendImmediateMail(targetName, vacantLines) {
-  const mailText = '【' + targetName + '】に空きが見つかりました！\n\n' + vacantLines.join('\n') + '\n\n' + SITE_URL;
+  const mailText = `【${targetName}】に空きが見つかりました！\n\n` + vacantLines.join('\n') + `\n\n${SITE_URL}`;
   
   try {
-    console.log('  => [メール送信中] ' + targetName + ' の空き通知を送信します...');
+    console.log(`  => [メール送信中] ${targetName} の空き通知を送信します...`);
     await transporter.sendMail({
       from: process.env.GMAIL_USER,
       to: process.env.NOTIFY_EMAIL,
-      subject: '【速報】空きあり：' + targetName,
+      subject: `【速報】空きあり：${targetName}`,
       text: mailText
     });
-    console.log('  => [メール送信完了] ' + targetName + ' の通知メールを送信しました。');
+    console.log(`  => [メール送信完了] ${targetName} の通知メールを送信しました。`);
   } catch (mailErr) {
-    console.error('  => [メール送信エラー] ' + targetName + ' の送信に失敗しました:', mailErr);
+    console.error(`  => [メール送信エラー] ${targetName} の送信に失敗しました:`, mailErr);
   }
 }
 
@@ -72,8 +70,8 @@ async function sendImmediateMail(targetName, vacantLines) {
   const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
 
   for (const target of TARGETS) {
-    console.log('\n==================================================');
-    console.log('[巡回開始] ' + target.name + ' を確認中...');
+    console.log(`\n==================================================`);
+    console.log(`[巡回開始] ${target.name} を確認中...`);
     const page = await browser.newPage();
     let success = false;
 
@@ -94,13 +92,13 @@ async function sendImmediateMail(targetName, vacantLines) {
         success = true;
         break; 
       } catch (e) {
-        console.log('  -> [アクセス失敗] ' + target.name + ' (トライ ' + retry + '/3): ページを入り直します...');
+        console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページを入り直します...`);
         await page.waitForTimeout(2000);
       }
     }
 
     if (!success) {
-      console.log('[アクセス断念] ' + target.name + ' はスキップして次の施設に向かいます。');
+      console.log(`[アクセス断念] ${target.name} はスキップして次の施設に向かいます。`);
       await page.close();
       continue; 
     }
@@ -122,7 +120,7 @@ async function sendImmediateMail(targetName, vacantLines) {
       }
       
       // 2. 月表示テーブルが「実際に表示（visible）」になるまで待機
-      // 有明テニスの莫大な面数データ量に耐えられるよう、タイムアウトを40秒に延長。
+      // 有明テニスの莫大なデータ量に耐えられるよう、タイムアウトを40秒に設定。二重クリック（開閉トグル競合）を防ぐためフォールバッククリックは廃止。
       console.log('  -> 月表示テーブルが画面に描画されるのを待機しています（最大40秒）...');
       await page.waitForSelector('#month-info', { state: 'visible', timeout: 40000 });
       
@@ -130,7 +128,7 @@ async function sendImmediateMail(targetName, vacantLines) {
       await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
 
-      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を精密特定する関数
+      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を瞬時に精密特定する超高速化関数
       const getActiveYearMonth = async () => {
         const firstCell = await page.$('#month-info td[id^="month_"]');
         if (firstCell) {
@@ -175,9 +173,9 @@ async function sendImmediateMail(targetName, vacantLines) {
 
               // 土日祝のみを対象にするフィルター
               if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
-                console.log('    [データ確認] ' + targetMonth + '月' + targetDay + '日: 画像の文字 = [' + altText + ']');
+                console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
                 const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
-                parkVacantLines.push(targetMonth + '月' + targetDay + '日（' + label + '）[' + altText + ']');
+                parkVacantLines.push(`${targetMonth}月${targetDay}日（${label}）[${altText}]`);
               }
             }
           }
@@ -191,21 +189,21 @@ async function sendImmediateMail(targetName, vacantLines) {
       // --- 【ステップA】当月分のカレンダーをスキャン ---
       const activeCurrentYM = await getActiveYearMonth();
       const currentMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '当月');
-      console.log('  -> 当月のスキャンを開始します（画面表示: ' + currentMonthTitle.trim() + ', 年月コード: ' + activeCurrentYM + '）');
+      console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}, 年月コード: ${activeCurrentYM}）`);
       
       const currentMonthResults = await scanCurrentCalendarPage(activeCurrentYM);
       if (currentMonthResults.length > 0) {
         thisParkVacantLines = thisParkVacantLines.concat(currentMonthResults);
       }
 
-      // --- --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
+      // --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
       if (todayNum >= 22) {
         const nextMonthButton = page.locator('.status-calendar-box a:has-text("次月"), .status-calendar-box button:has-text("次月")').first();
         
         if (await nextMonthButton.count() > 0) {
           // クリック前の表示年月を取得（例: "202606"）
           const beforeYM = await getActiveYearMonth();
-          console.log('  -> 【22日以降】翌月スキャンに移行。クリック前の年月コード: ' + beforeYM);
+          console.log(`  -> 【22日以降】翌月スキャンに移行。クリック前の年月コード: ${beforeYM}`);
 
           console.log('  -> 「次月→」ボタンをクリックします...');
           await nextMonthButton.evaluate(el => el.click());
@@ -216,7 +214,7 @@ async function sendImmediateMail(targetName, vacantLines) {
           let changed = false;
           const startTime = Date.now();
           while (Date.now() - startTime < 40000) { // 最大40秒待機（有明対応）
-            await page.waitForTimeout(1000); // 1.0秒ポーリング
+            await page.waitForTimeout(1000); // 1.0秒ポーリングでシステム負荷を軽減
             const currentYM = await getActiveYearMonth();
             if (currentYM && currentYM !== beforeYM) {
               changed = true;
@@ -237,7 +235,7 @@ async function sendImmediateMail(targetName, vacantLines) {
           
           const activeNextYM = await getActiveYearMonth();
           const nextMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '翌月');
-          console.log('  -> 翌月のスキャンを開始します（画面表示: ' + nextMonthTitle.trim() + ', 年月コード: ' + activeNextYM + '）');
+          console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}, 年月コード: ${activeNextYM}）`);
 
           const nextMonthResults = await scanCurrentCalendarPage(activeNextYM);
           if (nextMonthResults.length > 0) {
@@ -247,19 +245,19 @@ async function sendImmediateMail(targetName, vacantLines) {
           console.log('  -> [注意] 「次月」ボタンが見つからなかったため、翌月のスキャンをスキップします。');
         }
       } else {
-        console.log('  -> 今日は ' + todayNum + ' 日です（21日以下）。翌月スキャンはスキップします。');
+        console.log(`  -> 今日は ${todayNum} 日です（21日以下）。翌月スキャンはスキップします。`);
       }
 
       // --- 【ステップC】この施設で空きが見つかっていて、かつ有効なデータがあれば即時メール送信 ---
       if (thisParkVacantLines.length > 0) {
-        console.log('  -> 🎉 【空き発見】' + target.name + ' に ' + thisParkVacantLines.length + ' 件の空き枠があります！');
+        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
         await sendImmediateMail(target.name, thisParkVacantLines);
       } else {
-        console.log('  -> 【空きなし】' + target.name + ' に対象日の空きはありませんでした。');
+        console.log(`  -> 【空きなし】${target.name} に対象日の空きはありませんでした。`);
       }
 
     } catch (err) {
-      console.log('[解析エラー] ' + target.name + ' のデータ読み込み中にエラーが発生しました。この公園はスキップします。', err);
+      console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`, err);
     } finally {
       await page.close();
     }
@@ -269,5 +267,3 @@ async function sendImmediateMail(targetName, vacantLines) {
   console.log('\n==================================================');
   console.log('すべての施設の巡回チェックが終了しました。');
 })();
-
-```
