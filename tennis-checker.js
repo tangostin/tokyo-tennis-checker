@@ -9,7 +9,7 @@ const TARGETS = [
   { name: '木場公園', purpose: '1000_1030', park: '1060' },
   { name: '祖師谷公園', purpose: '1000_1030', park: '1070' },
   { name: '大島小松川公園（人工芝）', purpose: '1000_1030', park: '1160' },
-  { name: '汐入公園（人工芝）', purpose: '1000_1130', park: '1170' },
+  { name: '汐入公園（人工芝）', purpose: '1000_1030', park: '1170' },
   { name: '井の頭恩賜公園（人工芝）', purpose: '1000_1030', park: '1220' }, 
   { name: '大井ふ頭海浜公園B（人工芝）', purpose: '1000_1030', park: '1315' },
   { name: '有明テニスC人工芝コート', purpose: '1000_1030', park: '1360' },
@@ -104,31 +104,47 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 1. 詳細表示（月表示）ボタンを待機
-      const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"]').first();
+      // 1. 【超堅牢指定】週表示ボタンと誤認しないよう、ターゲットが「#monthly（月表示）」のボタンをピンポイントで取得
+      const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"][data-target="#monthly"]').first();
       await expandButton.scrollIntoViewIfNeeded().catch(() => {});
       
-      // 現在アコーディオンが開いているかどうか（aria-expanded）を確認
-      const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
-      
-      if (isExpanded === 'false') {
-        console.log('  -> 「詳細表示（月表示）」ボタンをクリックして展開します...');
-        // JSでの直接クリックにより、重いローディングマスクを完全にバイパスして確実に実行
-        await expandButton.evaluate(el => el.click());
-      } else {
-        console.log('  -> カレンダーは既に展開された状態です。');
+      // サイト側のJavaScript登録が完全に完了するのを待つ安全マージン（1.5秒）
+      console.log('  -> ボタンのロード完了を待機中（1.5秒）...');
+      await page.waitForTimeout(1500);
+
+      // 2. カレンダーテーブル（#month-info）が「実際に表示（visible）」になるまで確実に展開・待機するループ
+      let isVisible = false;
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
+        
+        if (isExpanded === 'false') {
+          console.log(`  -> 「月表示」の展開ボタンをクリックします... (試行 ${attempt}/4)`);
+          await expandButton.evaluate(el => el.click());
+        } else {
+          console.log(`  -> 月表示カレンダーは既に展開処理中です。描画を監視します... (試行 ${attempt}/4)`);
+        }
+
+        // テーブルが表示されるか最大5秒間待機
+        try {
+          await page.waitForSelector('#month-info', { state: 'visible', timeout: 5000 });
+          isVisible = true;
+          break; // 表示されたら即座にループを抜ける
+        } catch (waitErr) {
+          console.log('  -> [通信遅延] 5秒以内にカレンダーテーブルが表示されませんでした。再検証します。');
+        }
       }
-      
-      // 2. 月表示テーブルが「実際に表示（visible）」になるまで待機
-      // 有明テニスの莫大なデータ量に耐えられるよう、タイムアウトを40秒に設定。二重クリック（開閉トグル競合）を防ぐためフォールバッククリックは廃止。
-      console.log('  -> 月表示テーブルが画面に描画されるのを待機しています（最大40秒）...');
-      await page.waitForSelector('#month-info', { state: 'visible', timeout: 40000 });
+
+      if (!isVisible) {
+        // ループを抜けても表示されていない場合の最終バックアップ待機（最大15秒）
+        console.log('  -> [最終同期中] カレンダーテーブルの描画を最後に追加待機します...');
+        await page.waitForSelector('#month-info', { state: 'visible', timeout: 15000 });
+      }
       
       console.log('  -> 月表示テーブルを検出。描画とデータ通信の安定化のため2.5秒待機します...');
       await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
 
-      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を瞬時に精密特定する超高速化関数
+      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を精密特定する関数
       const getActiveYearMonth = async () => {
         const firstCell = await page.$('#month-info td[id^="month_"]');
         if (firstCell) {
