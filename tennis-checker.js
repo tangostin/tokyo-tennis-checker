@@ -62,10 +62,17 @@ async function sendImmediateMail(targetName, vacantLines) {
 }
 
 (async () => {
-  // ブラウザの起動
-  const browser = await chromium.launch({ headless: true });
+  // ブラウザの起動（安定のためのシグナル・タイムアウト制御スイッチを追加）
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-http2', // HTTP/2による不要な並行接続遅延を防止
+      '--disable-gpu',
+      '--no-sandbox',
+      '--disable-setuid-sandbox'
+    ]
+  });
 
-  // 実行時の「今日」の日付情報を取得（GitHub Actions等の環境でも日本時間にする）
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
   const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
 
@@ -73,18 +80,31 @@ async function sendImmediateMail(targetName, vacantLines) {
     console.log(`\n==================================================`);
     console.log(`[巡回開始] ${target.name} を確認中...`);
     const page = await browser.newPage();
+
+    // --- 【超軽量化】画像、Webフォント、各種メディアの読み込みを拒否する設定 ---
+    // これにより有明などの重いサイトでもページの全体ロード時間を激減させ、タイムアウトを撲滅します。
+    // ※ alt属性はHTML内にテキストとして存在するため、画像の実データを読まなくても「空き」判定は完璧に機能します。
+    await page.route('**/*', (route) => {
+      const type = route.request().resourceType();
+      if (type === 'image' || type === 'font' || type === 'media') {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
+
     let success = false;
 
-    // TOPでのセレクトボックス呼び出しを最大3回リトライ
+    // 1. TOPでの施設指定〜カレンダー大枠ロードまでを最大3回リトライ
     for (let retry = 1; retry <= 3; retry++) {
       try {
-        await page.goto(SITE_URL, { waitUntil: 'networkidle', timeout: 25000 });
+        await page.goto(SITE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await page.waitForSelector('#purpose-home', { timeout: 10000 });
         
         await page.selectOption('#purpose-home', target.purpose);
-        await page.waitForTimeout(600);
+        await page.waitForTimeout(400); // 選択の安定化ウェイト
         await page.selectOption('#bname-home', target.park);
-        await page.waitForTimeout(600);
+        await page.waitForTimeout(400);
         await page.click('#btn-go');
         
         // カレンダー大枠が表示されるのを待つ
@@ -92,8 +112,8 @@ async function sendImmediateMail(targetName, vacantLines) {
         success = true;
         break; 
       } catch (e) {
-        console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページを入り直します...`);
-        await page.waitForTimeout(2000);
+        console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページをリロードしてやり直します...`);
+        await page.waitForTimeout(1500);
       }
     }
 
@@ -104,34 +124,51 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 1. 【超堅牢指定】ターゲットが「#monthly（月表示）」のボタンをピンポイントで取得（週表示との誤認を100%防止）
+      // 2. 「月表示（#monthly）」展開ボタンの取得と【クリック連打・リトライ制御】
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"][data-target="#monthly"]').first();
       await expandButton.scrollIntoViewIfNeeded().catch(() => {});
       
-      // サイト側のJavaScript登録が完全に完了するのを待つ安全マージン（1.5秒）
-      console.log('  -> ボタンのロード完了を待機中（1.5秒）...');
-      await page.waitForTimeout(1500);
+      console.log('  -> ボタンのロード完了を待機中（1.0秒）...');
+      await page.waitForTimeout(1000);
 
-      // 2. カレンダーを確実に1回だけクリックして展開を要求
-      const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
-      if (isExpanded === 'false') {
-        console.log('  -> 「月表示」の展開ボタンをクリックします...');
-        // 物理クリックを試み、万が一遮断された場合はJavaScript直接クリックを実行
-        await expandButton.click({ force: true, timeout: 3000 }).catch(async () => {
-          await expandButton.evaluate(el => el.click());
-        });
-      } else {
-        console.log('  -> 月表示カレンダーは既に展開プロセス中（または展開済）です。');
+      // カレンダー展開＋日付セル(#month-info td)表示のチェックをリトライ化
+      let calendarOpened = false;
+      for (let openRetry = 1; openRetry <= 3; openRetry++) {
+        try {
+          // aria-expanded が 'true' になるまで繰り返しクリックを試みる（クリック不発対策）
+          let isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
+          let clickCount = 0;
+          
+          while (isExpanded !== 'true' && clickCount < 5) {
+            console.log(`  -> 「月表示」の展開ボタンをクリックします (試行 ${clickCount + 1}/5)...`);
+            await expandButton.click({ force: true, timeout: 3000 }).catch(async () => {
+              await expandButton.evaluate(el => el.click());
+            });
+            await page.waitForTimeout(800); // 反応を少し待つ
+            isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
+            clickCount++;
+          }
+
+          // 3. カレンダーの枠が表示され、かつデータ（日付セル）が実際にロードされるのを待機（最大15秒）
+          console.log(`  -> カレンダーデータ（日付セル）の読み込み待機中（トライ ${openRetry}/3）...`);
+          await page.waitForSelector('#monthly', { state: 'visible', timeout: 15000 });
+          await page.waitForSelector('#month-info td', { state: 'visible', timeout: 15000 });
+          
+          calendarOpened = true;
+          break; // 成功した場合はリトライループを抜ける
+        } catch (err) {
+          console.log(`  -> [展開遅延警告] カレンダーの読み込みがタイムアウトしました。再クリックを試みます (リトライ ${openRetry}/3)`);
+          await page.waitForTimeout(1500);
+        }
       }
 
-      // 3. カレンダーの枠が表示され、かつデータ（日付セル td）が実際にロードされるのを一発でスマートに待機（最大35秒）
-      console.log('  -> カレンダーデータ（日付セル）がロードされるのを待機しています...');
-      await page.waitForSelector('#monthly', { state: 'visible', timeout: 35000 });
-      await page.waitForSelector('#month-info td', { state: 'visible', timeout: 35000 });
+      if (!calendarOpened) {
+        throw new Error('月表示カレンダーのデータが指定時間内にロードされませんでした。');
+      }
       
-      console.log('  -> 月表示カレンダーと日付データの描画を確認。安定化のため2.5秒待機します...');
-      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
+      console.log('  -> 月表示カレンダーと日付データの描画を確認。安定化ウェイト（1.5秒）...');
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(1500);
 
       // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を精密特定する関数
       const getActiveYearMonth = async () => {
@@ -218,8 +255,8 @@ async function sendImmediateMail(targetName, vacantLines) {
           // 最初の日付セルの年月が新しい年月（例: "202607"）へ切り替わった瞬間を精密に待つ
           let changed = false;
           const startTime = Date.now();
-          while (Date.now() - startTime < 40000) { // 最大40秒待機（有明対応）
-            await page.waitForTimeout(1000); // 1.0秒ポーリングでシステム負荷を軽減
+          while (Date.now() - startTime < 30000) { // 最大30秒待機
+            await page.waitForTimeout(800); // 0.8秒ポーリングでシステム負荷を軽減
             const currentYM = await getActiveYearMonth();
             if (currentYM && currentYM !== beforeYM) {
               changed = true;
@@ -228,14 +265,12 @@ async function sendImmediateMail(targetName, vacantLines) {
           }
 
           if (changed) {
-            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信・描画完了のため4.0秒間安全に待機します...');
-            // Ajax通信リクエストがすべて終了するのを待機
-            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-            // 重い空き状況画像アセットが完全に置き換わるまで4.0秒の安全マージンを適用
-            await page.waitForTimeout(4000);
+            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信完了のため2.0秒間安全に待機します...');
+            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+            await page.waitForTimeout(2000); // 描画・反映の安全マージン
           } else {
-            console.log('  -> [警告] 切り替え待機がタイムアウトしました。長めのフォールバック待機（6秒）を行います。');
-            await page.waitForTimeout(6000);
+            console.log('  -> [警告] 切り替え待機がタイムアウトしました。長めのフォールバック待機（4秒）を行います。');
+            await page.waitForTimeout(4000);
           }
           
           const activeNextYM = await getActiveYearMonth();
@@ -255,7 +290,7 @@ async function sendImmediateMail(targetName, vacantLines) {
 
       // --- 【ステップC】この施設で空きが見つかっていて、かつ有効なデータがあれば即時メール送信 ---
       if (thisParkVacantLines.length > 0) {
-        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件 of 空き枠があります！`);
+        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
         await sendImmediateMail(target.name, thisParkVacantLines);
       } else {
         console.log(`  -> 【空きなし】${target.name} に対象日の空きはありませんでした。`);
