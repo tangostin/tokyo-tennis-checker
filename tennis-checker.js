@@ -104,7 +104,7 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 1. 【超堅牢指定】週表示ボタンと誤認しないよう、ターゲットが「#monthly（月表示）」のボタンをピンポイントで取得
+      // 1. 【超堅牢指定】ターゲットが「#monthly（月表示）」のボタンをピンポイントで取得（週表示との誤認を100%防止）
       const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"][data-target="#monthly"]').first();
       await expandButton.scrollIntoViewIfNeeded().catch(() => {});
       
@@ -112,35 +112,24 @@ async function sendImmediateMail(targetName, vacantLines) {
       console.log('  -> ボタンのロード完了を待機中（1.5秒）...');
       await page.waitForTimeout(1500);
 
-      // 2. カレンダーテーブル（#month-info）が「実際に表示（visible）」になるまで確実に展開・待機するループ
-      let isVisible = false;
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
-        
-        if (isExpanded === 'false') {
-          console.log(`  -> 「月表示」の展開ボタンをクリックします... (試行 ${attempt}/4)`);
+      // 2. カレンダーを確実に1回だけクリックして展開を要求
+      const isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
+      if (isExpanded === 'false') {
+        console.log('  -> 「月表示」の展開ボタンをクリックします...');
+        // 物理クリックを試み、万が一遮断された場合はJavaScript直接クリックを実行
+        await expandButton.click({ force: true, timeout: 3000 }).catch(async () => {
           await expandButton.evaluate(el => el.click());
-        } else {
-          console.log(`  -> 月表示カレンダーは既に展開処理中です。描画を監視します... (試行 ${attempt}/4)`);
-        }
-
-        // テーブルが表示されるか最大5秒間待機
-        try {
-          await page.waitForSelector('#month-info', { state: 'visible', timeout: 5000 });
-          isVisible = true;
-          break; // 表示されたら即座にループを抜ける
-        } catch (waitErr) {
-          console.log('  -> [通信遅延] 5秒以内にカレンダーテーブルが表示されませんでした。再検証します。');
-        }
+        });
+      } else {
+        console.log('  -> 月表示カレンダーは既に展開プロセス中（または展開済）です。');
       }
 
-      if (!isVisible) {
-        // ループを抜けても表示されていない場合の最終バックアップ待機（最大15秒）
-        console.log('  -> [最終同期中] カレンダーテーブルの描画を最後に追加待機します...');
-        await page.waitForSelector('#month-info', { state: 'visible', timeout: 15000 });
-      }
+      // 3. カレンダーの枠が表示され、かつデータ（日付セル td）が実際にロードされるのを一発でスマートに待機（最大35秒）
+      console.log('  -> カレンダーデータ（日付セル）がロードされるのを待機しています...');
+      await page.waitForSelector('#monthly', { state: 'visible', timeout: 35000 });
+      await page.waitForSelector('#month-info td', { state: 'visible', timeout: 35000 });
       
-      console.log('  -> 月表示テーブルを検出。描画とデータ通信の安定化のため2.5秒待機します...');
+      console.log('  -> 月表示カレンダーと日付データの描画を確認。安定化のため2.5秒待機します...');
       await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await page.waitForTimeout(2500); // 描画直後の安定化・完全同期のための安全マージン
 
@@ -266,7 +255,7 @@ async function sendImmediateMail(targetName, vacantLines) {
 
       // --- 【ステップC】この施設で空きが見つかっていて、かつ有効なデータがあれば即時メール送信 ---
       if (thisParkVacantLines.length > 0) {
-        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
+        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件 of 空き枠があります！`);
         await sendImmediateMail(target.name, thisParkVacantLines);
       } else {
         console.log(`  -> 【空きなし】${target.name} に対象日の空きはありませんでした。`);
