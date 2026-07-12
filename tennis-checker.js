@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
-// 対象施設リスト（全13施設） - 現在の正しい設定を完全に維持
+// 対象施設リスト（全13施設） - 正しい設定を完全に維持
 const TARGETS = [
   { name: '日比谷公園（人工芝）', purpose: '1000_1030', park: '1000' },
   { name: '芝公園（人工芝）', purpose: '1000_1030', park: '1010' },
@@ -29,7 +29,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// 祝日判定関数
+// 祝日判定関数（2026年）
 function isHoliday(date) {
   const y = date.getFullYear();
   const m = date.getMonth() + 1;
@@ -61,29 +61,49 @@ async function sendImmediateMail(targetName, vacantLines) {
   }
 }
 
+// ターゲットとなる最終期限日（Dateオブジェクト）を計算する関数
+function getTargetLimitDate(now) {
+  const todayNum = now.getDate();
+  let targetYear = now.getFullYear();
+  let targetMonth = now.getMonth(); // 0-indexed
+
+  if (todayNum >= 22) {
+    // 22日以降は翌月末まで
+    targetMonth += 1;
+    if (targetMonth > 11) {
+      targetMonth = 0;
+      targetYear += 1;
+    }
+  }
+  // その月の最終日（日付に0を指定すると前月の末日になるため、targetMonth+1 の 0日を指定）
+  return new Date(targetYear, targetMonth + 1, 0, 23, 59, 59);
+}
+
 (async () => {
-  // ブラウザの起動（安定のためのシグナル・タイムアウト制御スイッチを追加）
   const browser = await chromium.launch({
     headless: true,
     args: [
-      '--disable-http2', // HTTP/2による不要な並行接続遅延を防止
+      '--disable-http2',
       '--disable-gpu',
       '--no-sandbox',
       '--disable-setuid-sandbox'
     ]
   });
 
+  // 日本時間での現在時刻取得
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const todayNum = now.getDate(); // 日本時間の日にち（1〜31）
+  const todayObj = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 時間をリセットした今日
+
+  // 巡回の最終期限日（この日を含む週までスキャンする）
+  const limitDate = getTargetLimitDate(now);
+  console.log(`[巡回設定] 本日: ${now.toLocaleDateString('ja-JP')} | スキャン期限: ${limitDate.toLocaleDateString('ja-JP')} まで`);
 
   for (const target of TARGETS) {
     console.log(`\n==================================================`);
     console.log(`[巡回開始] ${target.name} を確認中...`);
     const page = await browser.newPage();
 
-    // --- 【超軽量化】画像、Webフォント、各種メディアの読み込みを拒否する設定 ---
-    // これにより有明などの重いサイトでもページの全体ロード時間を激減させ、タイムアウトを撲滅します。
-    // ※ alt属性はHTML内にテキストとして存在するため、画像の実データを読まなくても「空き」判定は完璧に機能します。
+    // 画像・メディアの読み込みをブロックして超高速化
     await page.route('**/*', (route) => {
       const type = route.request().resourceType();
       if (type === 'image' || type === 'font' || type === 'media') {
@@ -95,24 +115,24 @@ async function sendImmediateMail(targetName, vacantLines) {
 
     let success = false;
 
-    // 1. TOPでの施設指定〜カレンダー大枠ロードまでを最大3回リトライ
+    // 1. TOPでの施設指定〜検索結果画面のロード（週表示カレンダーは初期露出）までを最大3回リトライ
     for (let retry = 1; retry <= 3; retry++) {
       try {
         await page.goto(SITE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await page.waitForSelector('#purpose-home', { timeout: 10000 });
         
         await page.selectOption('#purpose-home', target.purpose);
-        await page.waitForTimeout(400); // 選択の安定化ウェイト
+        await page.waitForTimeout(400);
         await page.selectOption('#bname-home', target.park);
         await page.waitForTimeout(400);
         await page.click('#btn-go');
         
-        // カレンダー大枠が表示されるのを待つ
+        // カレンダー枠が表示されるのを待つ
         await page.waitForSelector('.status-calendar-box', { timeout: 15000 });
         success = true;
         break; 
       } catch (e) {
-        console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページをリロードしてやり直します...`);
+        console.log(`  -> [アクセス失敗] ${target.name} (トライ ${retry}/3): ページをリロードします...`);
         await page.waitForTimeout(1500);
       }
     }
@@ -124,180 +144,143 @@ async function sendImmediateMail(targetName, vacantLines) {
     }
 
     try {
-      // 2. 「月表示（#monthly）」展開ボタンの取得と【クリック連打・リトライ制御】
-      const expandButton = page.locator('.status-calendar-box [aria-label="詳細表示"][data-target="#monthly"]').first();
-      await expandButton.scrollIntoViewIfNeeded().catch(() => {});
-      
-      console.log('  -> ボタンのロード完了を待機中（1.0秒）...');
+      // 週表示カレンダーの安定化ウェイト
+      await page.waitForSelector('td[id^="20"]', { state: 'visible', timeout: 10000 });
       await page.waitForTimeout(1000);
 
-      // カレンダー展開＋日付セル(#month-info td)表示のチェックをリトライ化
-      let calendarOpened = false;
-      for (let openRetry = 1; openRetry <= 3; openRetry++) {
-        try {
-          // aria-expanded が 'true' になるまで繰り返しクリックを試みる（クリック不発対策）
-          let isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
-          let clickCount = 0;
-          
-          while (isExpanded !== 'true' && clickCount < 5) {
-            console.log(`  -> 「月表示」の展開ボタンをクリックします (試行 ${clickCount + 1}/5)...`);
-            await expandButton.click({ force: true, timeout: 3000 }).catch(async () => {
-              await expandButton.evaluate(el => el.click());
-            });
-            await page.waitForTimeout(800); // 反応を少し待つ
-            isExpanded = await expandButton.getAttribute('aria-expanded').catch(() => 'false');
-            clickCount++;
-          }
-
-          // 3. カレンダーの枠が表示され、かつデータ（日付セル）が実際にロードされるのを待機（最大15秒）
-          console.log(`  -> カレンダーデータ（日付セル）の読み込み待機中（トライ ${openRetry}/3）...`);
-          await page.waitForSelector('#monthly', { state: 'visible', timeout: 15000 });
-          await page.waitForSelector('#month-info td', { state: 'visible', timeout: 15000 });
-          
-          calendarOpened = true;
-          break; // 成功した場合はリトライループを抜ける
-        } catch (err) {
-          console.log(`  -> [展開遅延警告] カレンダーの読み込みがタイムアウトしました。再クリックを試みます (リトライ ${openRetry}/3)`);
-          await page.waitForTimeout(1500);
-        }
-      }
-
-      if (!calendarOpened) {
-        throw new Error('月表示カレンダーのデータが指定時間内にロードされませんでした。');
-      }
-      
-      console.log('  -> 月表示カレンダーと日付データの描画を確認。安定化ウェイト（1.5秒）...');
-      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(1500);
-
-      // 最初に見つかったカレンダーセルのIDから、現在表示されている年月（YYYYMM）を精密特定する関数
-      const getActiveYearMonth = async () => {
-        const firstCell = await page.$('#month-info td[id^="month_"]');
+      // 表示されているカレンダーの「最初の日付セルのID（YYYYMMDD形式）」を抽出する関数
+      const getFirstCellDateStr = async () => {
+        const firstCell = await page.$('td[id^="20"]');
         if (firstCell) {
           const id = await firstCell.getAttribute('id');
-          return id ? id.replace('month_', '').slice(0, 6) : ''; // "202606"
+          return id ? id.split('_')[0] : ''; // "20260729"
         }
         return '';
       };
 
-      // カレンダー内の空き枠を解析する共通関数
-      async function scanCurrentCalendarPage(activeYM) {
-        const parkVacantLines = [];
-        const cells = await page.$$('#month-info td');
-
+      // 表示されているカレンダーの「最大の日付（Dateオブジェクト）」を特定する関数
+      const getMaxCellDate = async () => {
+        const cells = await page.$$('td[id^="20"]');
+        let maxDate = new Date(1970, 0, 1);
         for (const cell of cells) {
           const id = await cell.getAttribute('id');
-          if (!id || !id.startsWith('month_')) continue;
-
-          const dateStr = id.replace('month_', ''); // "20260625"
-          const targetYear = parseInt(dateStr.slice(0, 4), 10);
-          const targetMonth = parseInt(dateStr.slice(4, 6), 10);
-          const targetDay = parseInt(dateStr.slice(6, 8), 10);
-          
-          const cellYM = dateStr.slice(0, 6); // "202606"
-          
-          // 現アクティブ年月と一致しない端数の日（不慮のノイズ）はスキャンから完全に除外
-          if (activeYM && cellYM !== activeYM) continue;
-
-          const imgElement = await cell.$('img');
-          if (imgElement) {
-            let altText = await imgElement.getAttribute('alt');
-            if (altText) altText = altText.trim();
-
-            if (altText === '空き' || altText === '一部空き') {
-              const todayObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-              const checkDate = new Date(targetYear, targetMonth - 1, targetDay);
-
-              // 今日より前の過去の日付は除外
-              if (checkDate < todayObj) continue; 
-
-              const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
-
-              // 土日祝のみを対象にするフィルター
-              if (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate)) {
-                console.log(`    [データ確認] ${targetMonth}月${targetDay}日: 画像の文字 = [${altText}]`);
-                const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
-                parkVacantLines.push(`${targetMonth}月${targetDay}日（${label}）[${altText}]`);
-              }
+          if (id) {
+            const dateStr = id.split('_')[0]; // "20260729"
+            const y = parseInt(dateStr.slice(0, 4), 10);
+            const m = parseInt(dateStr.slice(4, 6), 10) - 1;
+            const d = parseInt(dateStr.slice(6, 8), 10);
+            const cellDate = new Date(y, m, d);
+            if (cellDate > maxDate) {
+              maxDate = cellDate;
             }
           }
         }
-        return parkVacantLines;
-      }
+        return maxDate;
+      };
 
-      // この施設で見つかったすべての空き情報を保持する配列
-      let thisParkVacantLines = [];
+      // この公園の「空きが見つかったユニークな日付（文字列）」を保持するSet構造
+      const vacantDatesSet = new Set();
+      let isFinished = false;
+      let pageCount = 1;
 
-      // --- 【ステップA】当月分のカレンダーをスキャン ---
-      const activeCurrentYM = await getActiveYearMonth();
-      const currentMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '当月');
-      console.log(`  -> 当月のスキャンを開始します（画面表示: ${currentMonthTitle.trim()}, 年月コード: ${activeCurrentYM}）`);
-      
-      const currentMonthResults = await scanCurrentCalendarPage(activeCurrentYM);
-      if (currentMonthResults.length > 0) {
-        thisParkVacantLines = thisParkVacantLines.concat(currentMonthResults);
-      }
+      // 「期限日（当月末 or 翌月末）」を超える週になるまでループ
+      while (!isFinished) {
+        console.log(`  -> [ページ ${pageCount}] 週表示カレンダーをスキャン中...`);
 
-      // --- 【ステップB】22日〜月末限定：翌月分のカレンダーをスキャン ---
-      if (todayNum >= 22) {
-        const nextMonthButton = page.locator('.status-calendar-box a:has-text("次月"), .status-calendar-box button:has-text("次月")').first();
-        
-        if (await nextMonthButton.count() > 0) {
-          // クリック前の表示年月を取得（例: "202606"）
-          const beforeYM = await getActiveYearMonth();
-          console.log(`  -> 【22日以降】翌月スキャンに移行。クリック前の年月コード: ${beforeYM}`);
+        // 現在表示されているカレンダーの最大日付をチェック
+        const currentMaxDate = await getMaxCellDate();
+        if (currentMaxDate >= limitDate) {
+          isFinished = true; // 今回のスキャンで終了
+        }
 
-          console.log('  -> 「次月→」ボタンをクリックします...');
-          await nextMonthButton.evaluate(el => el.click());
+        // --- 空き枠のスキャン（超高速・日付のみ抽出ロジック） ---
+        // class="available" が付与されているセル（空き枠）を全取得
+        const availableCells = await page.$$('td.available');
 
-          console.log('  -> 翌月カレンダーへ切り替え中... (最初の日付セルが新しい年月に入れ替わるのを監視)');
-          
-          // 最初の日付セルの年月が新しい年月（例: "202607"）へ切り替わった瞬間を精密に待つ
+        for (const cell of availableCells) {
+          const id = await cell.getAttribute('id'); // 例: "20260729_40"
+          if (!id) continue;
+
+          const dateStr = id.split('_')[0]; // "20260729"
+          const targetYear = parseInt(dateStr.slice(0, 4), 10);
+          const targetMonth = parseInt(dateStr.slice(4, 6), 10);
+          const targetDay = parseInt(dateStr.slice(6, 8), 10);
+
+          const checkDate = new Date(targetYear, targetMonth - 1, targetDay);
+
+          // 1. 過去日付はスキャンから除外
+          if (checkDate < todayObj) continue;
+
+          // 2. 期限日を超える日付も除外
+          if (checkDate > limitDate) continue;
+
+          // 3. 土曜日、日曜日、祝日のみを対象にするフィルター
+          const isWeekendOrHoliday = (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate));
+
+          if (isWeekendOrHoliday) {
+            // YYYY-MM-DD 形式でSetに追加（自動で重複が排除される）
+            const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
+            const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
+            
+            const logDateStr = `${targetMonth}月${targetDay}日（${label}）`;
+            vacantDatesSet.add(logDateStr);
+          }
+        }
+
+        // 期限日に達している、またはこれ以上進めない場合はループを抜ける
+        if (isFinished) {
+          console.log(`  -> 設定されたスキャン期限 (${limitDate.toLocaleDateString('ja-JP')}) に到達したため、巡回を終了します。`);
+          break;
+        }
+
+        // --- 「次週>>」ボタンでのページ送り処理 ---
+        const nextWeekButton = page.locator('a:has-text("次週"), button:has-text("次週")').first();
+        if (await nextWeekButton.count() > 0) {
+          const beforeDateStr = await getFirstCellDateStr();
+          console.log(`  -> 「次週>>」ボタンをクリックして進みます... (切り替え前基準日: ${beforeDateStr})`);
+
+          await nextWeekButton.click().catch(async () => {
+            await nextWeekButton.evaluate(el => el.click());
+          });
+
+          // 最初の日付セルの日付が変わるまで精密ポーリング監視（最大15秒）
           let changed = false;
           const startTime = Date.now();
-          while (Date.now() - startTime < 30000) { // 最大30秒待機
-            await page.waitForTimeout(800); // 0.8秒ポーリングでシステム負荷を軽減
-            const currentYM = await getActiveYearMonth();
-            if (currentYM && currentYM !== beforeYM) {
+          while (Date.now() - startTime < 15000) {
+            await page.waitForTimeout(500); // 0.5秒ごとにチェック
+            const currentDateStr = await getFirstCellDateStr();
+            if (currentDateStr && currentDateStr !== beforeDateStr) {
               changed = true;
               break;
             }
           }
 
           if (changed) {
-            console.log('  -> [検出成功] カレンダーのID切り替えを確認。通信完了のため2.0秒間安全に待機します...');
-            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-            await page.waitForTimeout(2000); // 描画・反映の安全マージン
+            await page.waitForTimeout(1000); // 描画安定のためのバッファ
+            pageCount++;
           } else {
-            console.log('  -> [警告] 切り替え待機がタイムアウトしました。長めのフォールバック待機（4秒）を行います。');
-            await page.waitForTimeout(4000);
-          }
-          
-          const activeNextYM = await getActiveYearMonth();
-          const nextMonthTitle = await page.locator('.status-calendar-box .calendar-title, .status-calendar-box text').first().innerText().catch(() => '翌月');
-          console.log(`  -> 翌月のスキャンを開始します（画面表示: ${nextMonthTitle.trim()}, 年月コード: ${activeNextYM}）`);
-
-          const nextMonthResults = await scanCurrentCalendarPage(activeNextYM);
-          if (nextMonthResults.length > 0) {
-            thisParkVacantLines = thisParkVacantLines.concat(nextMonthResults);
+            console.log('  -> [警告] 次の週への切り替え待機がタイムアウトしました。巡回を終了します。');
+            break;
           }
         } else {
-          console.log('  -> [注意] 「次月」ボタンが見つからなかったため、翌月のスキャンをスキップします。');
+          console.log('  -> [案内] 「次週>>」ボタンが見つからないため、これ以上の巡回を終了します。');
+          break;
         }
-      } else {
-        console.log(`  -> 今日は ${todayNum} 日です（21日以下）。翌月スキャンはスキップします。`);
       }
 
-      // --- 【ステップC】この施設で空きが見つかっていて、かつ有効なデータがあれば即時メール送信 ---
-      if (thisParkVacantLines.length > 0) {
-        console.log(`  -> 🎉 【空き発見】${target.name} に ${thisParkVacantLines.length} 件の空き枠があります！`);
-        await sendImmediateMail(target.name, thisParkVacantLines);
+      // --- 空き情報の即時メール送信 ---
+      if (vacantDatesSet.size > 0) {
+        // Setを配列に戻し、きれいにフォーマット
+        const vacantLines = Array.from(vacantDatesSet).map(dateLine => `${dateLine} [空きあり]`);
+        
+        console.log(`  -> 🎉 【空き発見】${target.name} に ${vacantLines.length} 日間の対象日があります！`);
+        await sendImmediateMail(target.name, vacantLines);
       } else {
-        console.log(`  -> 【空きなし】${target.name} に対象日の空きはありませんでした。`);
+        console.log(`  -> 【空きなし】${target.name} に対象となる土日祝の空きはありませんでした。`);
       }
 
     } catch (err) {
-      console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。この公園はスキップします。`, err);
+      console.log(`[解析エラー] ${target.name} のデータ読み込み中にエラーが発生しました。次の公園へ進みます。`, err);
     } finally {
       await page.close();
     }
