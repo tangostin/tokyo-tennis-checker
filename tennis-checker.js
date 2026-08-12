@@ -1,5 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
+
+// 状態保存用ファイルのパス（リポジトリ上の last_vacant.txt を使用）
+const STATE_FILE_PATH = path.join(__dirname, 'last_vacant.txt');
 
 // 対象施設リスト（全13施設） - 正しい設定を完全に維持
 const TARGETS = [
@@ -19,6 +24,52 @@ const TARGETS = [
 ];
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/';
+
+/**
+ * 前回の空き状況（last_vacant.txt）を読み込みます。
+ * @returns {Object} 施設名をキーとした空き状況リストオブジェクト
+ */
+function loadPreviousState() {
+  try {
+    if (fs.existsSync(STATE_FILE_PATH)) {
+      const content = fs.readFileSync(STATE_FILE_PATH, 'utf-8').trim();
+      if (content) {
+        return JSON.parse(content);
+      }
+    }
+  } catch (err) {
+    console.log(`[状態ファイル読み込み] 既存データの読み込み・JSONパースに失敗しました。新規扱いで開始します: ${err.message}`);
+  }
+  return {};
+}
+
+/**
+ * 現在の最新空き状況を last_vacant.txt に保存します。
+ * @param {Object} state 保存する空き状況オブジェクト
+ */
+function saveCurrentState(state) {
+  try {
+    fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+    console.log(`  => [状態保存] last_vacant.txt を更新しました。`);
+  } catch (err) {
+    console.error(`  => [状態保存エラー] last_vacant.txt の書き込みに失敗しました: ${err.message}`);
+  }
+}
+
+/**
+ * 前回と今回の空き状況リストに変化があるか判定します。
+ * @param {Array<string>} prevList 前回の空き日程リスト
+ * @param {Array<string>} currentList 今回の空き日程リスト
+ * @returns {boolean} 変化があれば true
+ */
+function hasVacantChanged(prevList = [], currentList = []) {
+  if (prevList.length !== currentList.length) return true;
+  
+  const sortedPrev = [...prevList].sort();
+  const sortedCurrent = [...currentList].sort();
+  
+  return sortedPrev.some((val, idx) => val !== sortedCurrent[idx]);
+}
 
 // メール送信用トランスポートの作成
 const transporter = nodemailer.createTransport({
@@ -43,16 +94,25 @@ function isHoliday(date) {
   return holidays2026.includes(`${y}-${m}-${d}`);
 }
 
-// 個別に即時メールを送信する関数
+// 個別に即時メールを送信する関数（最新状態または解消状態に対応）
 async function sendImmediateMail(targetName, vacantLines) {
-  const mailText = `【${targetName}】に空きが見つかりました！\n\n` + vacantLines.join('\n') + `\n\n${SITE_URL}`;
+  let subject = '';
+  let mailText = '';
+
+  if (vacantLines.length > 0) {
+    subject = `【速報】空き状況更新：${targetName}`;
+    mailText = `【${targetName}】の最新の空き状況です。\n\n` + vacantLines.join('\n') + `\n\n${SITE_URL}`;
+  } else {
+    subject = `【更新】空き解消：${targetName}`;
+    mailText = `【${targetName}】の対象日の空き枠はすべて埋まりました（現在空きはありません）。\n\n${SITE_URL}`;
+  }
   
   try {
-    console.log(`  => [メール送信中] ${targetName} の空き通知を送信します...`);
+    console.log(`  => [メール送信中] ${targetName} の差分通知を送信します...`);
     await transporter.sendMail({
       from: process.env.GMAIL_USER,
       to: process.env.NOTIFY_EMAIL,
-      subject: `【速報】空きあり：${targetName}`,
+      subject: subject,
       text: mailText
     });
     console.log(`  => [メール送信完了] ${targetName} の通知メールを送信しました。`);
@@ -75,11 +135,14 @@ function getTargetLimitDate(now) {
       targetYear += 1;
     }
   }
-  // その月の最終日（日付に0を指定すると前月の末日になるため、targetMonth+1 の 0日を指定）
+  // その月の最終日
   return new Date(targetYear, targetMonth + 1, 0, 23, 59, 59);
 }
 
 (async () => {
+  // 前回の空き状況を読み込み
+  const previousState = loadPreviousState();
+
   const browser = await chromium.launch({
     headless: true,
     args: [
@@ -115,7 +178,7 @@ function getTargetLimitDate(now) {
 
     let success = false;
 
-    // 1. TOPでの施設指定〜検索結果画面のロード（週表示カレンダーは初期露出）までを最大3回リトライ
+    // 1. TOPでの施設指定〜検索結果画面のロードまでを最大3回リトライ
     for (let retry = 1; retry <= 3; retry++) {
       try {
         await page.goto(SITE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
@@ -148,24 +211,22 @@ function getTargetLimitDate(now) {
       await page.waitForSelector('td[id^="20"]', { state: 'visible', timeout: 10000 });
       await page.waitForTimeout(1000);
 
-      // 表示されているカレンダーの「最初の日付セルのID（YYYYMMDD形式）」を抽出する関数
       const getFirstCellDateStr = async () => {
         const firstCell = await page.$('td[id^="20"]');
         if (firstCell) {
           const id = await firstCell.getAttribute('id');
-          return id ? id.split('_')[0] : ''; // "20260729"
+          return id ? id.split('_')[0] : '';
         }
         return '';
       };
 
-      // 表示されているカレンダーの「最大の日付（Dateオブジェクト）」を特定する関数
       const getMaxCellDate = async () => {
         const cells = await page.$$('td[id^="20"]');
         let maxDate = new Date(1970, 0, 1);
         for (const cell of cells) {
           const id = await cell.getAttribute('id');
           if (id) {
-            const dateStr = id.split('_')[0]; // "20260729"
+            const dateStr = id.split('_')[0];
             const y = parseInt(dateStr.slice(0, 4), 10);
             const m = parseInt(dateStr.slice(4, 6), 10) - 1;
             const d = parseInt(dateStr.slice(6, 8), 10);
@@ -178,47 +239,37 @@ function getTargetLimitDate(now) {
         return maxDate;
       };
 
-      // この公園の「空きが見つかったユニークな日付（文字列）」を保持するSet構造
       const vacantDatesSet = new Set();
       let isFinished = false;
       let pageCount = 1;
 
-      // 「期限日（当月末 or 翌月末）」を超える週になるまでループ
       while (!isFinished) {
         console.log(`  -> [ページ ${pageCount}] 週表示カレンダーをスキャン中...`);
 
-        // 現在表示されているカレンダーの最大日付をチェック
         const currentMaxDate = await getMaxCellDate();
         if (currentMaxDate >= limitDate) {
-          isFinished = true; // 今回のスキャンで終了
+          isFinished = true;
         }
 
-        // --- 空き枠のスキャン（超高速・日付のみ抽出ロジック） ---
-        // class="available" が付与されているセル（空き枠）を全取得
         const availableCells = await page.$$('td.available');
 
         for (const cell of availableCells) {
-          const id = await cell.getAttribute('id'); // 例: "20260729_40"
+          const id = await cell.getAttribute('id');
           if (!id) continue;
 
-          const dateStr = id.split('_')[0]; // "20260729"
+          const dateStr = id.split('_')[0];
           const targetYear = parseInt(dateStr.slice(0, 4), 10);
           const targetMonth = parseInt(dateStr.slice(4, 6), 10);
           const targetDay = parseInt(dateStr.slice(6, 8), 10);
 
           const checkDate = new Date(targetYear, targetMonth - 1, targetDay);
 
-          // 1. 過去日付はスキャンから除外
           if (checkDate < todayObj) continue;
-
-          // 2. 期限日を超える日付も除外
           if (checkDate > limitDate) continue;
 
-          // 3. 土曜日、日曜日、祝日のみを対象にするフィルター
           const isWeekendOrHoliday = (checkDate.getDay() === 0 || checkDate.getDay() === 6 || isHoliday(checkDate));
 
           if (isWeekendOrHoliday) {
-            // YYYY-MM-DD 形式でSetに追加（自動で重複が排除される）
             const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][checkDate.getDay()];
             const label = isHoliday(checkDate) ? '祝' : dayOfWeek;
             
@@ -227,13 +278,11 @@ function getTargetLimitDate(now) {
           }
         }
 
-        // 期限日に達している、またはこれ以上進めない場合はループを抜ける
         if (isFinished) {
           console.log(`  -> 設定されたスキャン期限 (${limitDate.toLocaleDateString('ja-JP')}) に到達したため、巡回を終了します。`);
           break;
         }
 
-        // --- 「次週>>」ボタンでのページ送り処理 ---
         const nextWeekButton = page.locator('a:has-text("次週"), button:has-text("次週")').first();
         if (await nextWeekButton.count() > 0) {
           const beforeDateStr = await getFirstCellDateStr();
@@ -243,11 +292,10 @@ function getTargetLimitDate(now) {
             await nextWeekButton.evaluate(el => el.click());
           });
 
-          // 最初の日付セルの日付が変わるまで精密ポーリング監視（最大15秒）
           let changed = false;
           const startTime = Date.now();
           while (Date.now() - startTime < 15000) {
-            await page.waitForTimeout(500); // 0.5秒ごとにチェック
+            await page.waitForTimeout(500);
             const currentDateStr = await getFirstCellDateStr();
             if (currentDateStr && currentDateStr !== beforeDateStr) {
               changed = true;
@@ -256,7 +304,7 @@ function getTargetLimitDate(now) {
           }
 
           if (changed) {
-            await page.waitForTimeout(1000); // 描画安定のためのバッファ
+            await page.waitForTimeout(1000);
             pageCount++;
           } else {
             console.log('  -> [警告] 次の週への切り替え待機がタイムアウトしました。巡回を終了します。');
@@ -268,15 +316,33 @@ function getTargetLimitDate(now) {
         }
       }
 
-      // --- 空き情報の即時メール送信 ---
-      if (vacantDatesSet.size > 0) {
-        // Setを配列に戻し、きれいにフォーマット
-        const vacantLines = Array.from(vacantDatesSet).map(dateLine => `${dateLine} [空きあり]`);
-        
-        console.log(`  -> 🎉 【空き発見】${target.name} に ${vacantLines.length} 日間の対象日があります！`);
-        await sendImmediateMail(target.name, vacantLines);
+      // 今回確認できた空きリストを整形・ソート
+      const currentVacantLines = Array.from(vacantDatesSet)
+        .sort((a, b) => {
+          const mA = parseInt(a.match(/^(\d+)月/)?.[1] || 0, 10);
+          const dA = parseInt(a.match(/月(\d+)日/)?.[1] || 0, 10);
+          const mB = parseInt(b.match(/^(\d+)月/)?.[1] || 0, 10);
+          const dB = parseInt(b.match(/月(\d+)日/)?.[1] || 0, 10);
+          return (mA * 100 + dA) - (mB * 100 + dB);
+        })
+        .map(dateLine => `${dateLine} [空きあり]`);
+
+      const prevVacantLines = previousState[target.name] || [];
+
+      // 前回と比較して空き状況に変更があるか判定
+      if (hasVacantChanged(prevVacantLines, currentVacantLines)) {
+        console.log(`  -> 🔔 【空き状況の変化を検知】${target.name}`);
+        console.log(`     前回 (${prevVacantLines.length}件):`, prevVacantLines);
+        console.log(`     今回 (${currentVacantLines.length}件):`, currentVacantLines);
+
+        // 状態の変化（増減や日付変更）があったときだけメールを送信
+        await sendImmediateMail(target.name, currentVacantLines);
+
+        // 状態を更新して保存
+        previousState[target.name] = currentVacantLines;
+        saveCurrentState(previousState);
       } else {
-        console.log(`  -> 【空きなし】${target.name} に対象となる土日祝の空きはありませんでした。`);
+        console.log(`  -> 💤 【変化なし】${target.name}: 前回の状態（${currentVacantLines.length}件）から変更はありません。メール送信をスキップします。`);
       }
 
     } catch (err) {
