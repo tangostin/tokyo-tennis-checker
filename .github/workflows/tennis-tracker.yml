@@ -1,44 +1,49 @@
-# STREAMING_CHUNK:Checking out the repository code...
-- name: Checkout repository
-  uses: actions/checkout@v4
-  with:
-    persist-credentials: true
+name: Tennis Tracker
 
-# STREAMING_CHUNK:Setting up Node.js environment...
-- name: Set up Node.js
-  uses: actions/setup-node@v4
-  with:
-    node-version: '20'
+on:
+  workflow_dispatch: # これにより「Run workflow」ボタンが表示されます
+  # 定期実行している場合は以下も記述（例）
+  # schedule:
+  #   - cron: '0 * * * *'
 
-# STREAMING_CHUNK:Installing dependencies...
-- name: Install dependencies
-  run: npm install
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-# STREAMING_CHUNK:Installing Playwright Chromium browser...
-- name: Install Playwright Browsers
-  run: npx playwright install chromium
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-# STREAMING_CHUNK:Running the tennis check script...
-- name: Run checker
-  env:
-    NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
-    GMAIL_USER: ${{ secrets.GMAIL_USER }}
-    GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-  # 実行するJSのファイル名に合わせて指定します（デフォルトは index.js）
-  run: tennis-checker index.js
+      - name: Install dependencies
+        run: npm install
 
-# STREAMING_CHUNK:Committing and pushing updated state file...
-- name: Commit and Push if last_vacant.txt changed
-  run: |
-    git config --local user.email "github-actions[bot]@users.noreply.github.com"
-    git config --local user.name "github-actions[bot]"
-    if [ -f last_vacant.txt ]; then
-      git add last_vacant.txt
-      if ! git diff --quiet || ! git diff --staged --quiet; then
-        git commit -m "Update last vacant cache [skip ci]"
-        git pull --rebase origin ${{ github.ref_name }}
-        git push
-      else
-        echo "No changes in last_vacant.txt"
-      fi
-    fi
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium
+
+      - name: Run checker
+        env:
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: node index.js # ※実行コマンドが `node index.js` であれば書き換えてください
+
+      - name: Commit and Push if last_vacant.txt changed
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          if [ -f last_vacant.txt ]; then
+            git add last_vacant.txt
+            if ! git diff --quiet || ! git diff --staged --quiet; then
+              git commit -m "Update last vacant cache [skip ci]"
+              git pull --rebase origin ${{ github.ref_name }}
+              git push
+            else
+              echo "No changes in last_vacant.txt"
+            fi
+          fi
